@@ -686,6 +686,9 @@ class VhsHandler extends Component {
       return;
     }
     this.setOptions_();
+	
+    window.currentHlsQueryParams = this.source_.queryParams;
+
     // add master playlist controller options
     this.options_.src = expandDataUri(this.source_.src);
     this.options_.tech = this.tech_;

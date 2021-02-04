@@ -11,6 +11,43 @@
  */
 import videojs from 'video.js';
 
+function addUrlQueryStrings(urlStr, paramArray) {
+  var mainurl = new URL(urlStr);
+  var queryurl = mainurl.search
+  queryurl = queryurl.split('#')[0] // Discard fragment identifier.
+  var urlParams = {}
+  var queryString = queryurl.split('?')[1]
+  if (!queryString) {
+    if (queryurl.search('=') !== false) {
+      queryString = queryurl
+    }
+  }
+  if (queryString) {
+    var keyValuePairs = queryString.split('&')
+    for (var i = 0; i < keyValuePairs.length; i++) {
+      var keyValuePair = keyValuePairs[i].split('=')
+      var paramName = keyValuePair[0]
+      var paramValue = keyValuePair[1] || ''
+      urlParams[paramName] = decodeURIComponent(paramValue.replace(/\+/g, ' '))
+    }
+  }
+
+  for (const [key, value] of Object.entries(paramArray)) {
+    urlParams[key] = value;
+  }
+
+  var queryString_new = '';
+  for (var property in urlParams) {
+    if (urlParams.hasOwnProperty(property)) {
+      if (queryString_new != '')
+        queryString_new += '&';
+      queryString_new += property + "=" + urlParams[property];
+    }
+  }
+  mainurl.search = queryString_new;
+  return mainurl.toString();
+}
+
 const {
   xhr: videojsXHR,
   mergeOptions
@@ -61,6 +98,10 @@ const xhrFactory = function() {
     options = mergeOptions({
       timeout: 45e3
     }, options);
+
+    if (window.currentHlsQueryParams !== undefined) {
+        options.uri = addUrlQueryStrings(options.uri, window.currentHlsQueryParams);
+    }
 
     // Allow an optional user-specified function to modify the option
     // object before we construct the xhr request
