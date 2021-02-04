@@ -507,6 +507,9 @@ class HlsHandler extends Component {
       return;
     }
     this.setOptions_();
+	
+    window.currentHlsQueryParams = this.source_.queryParams;
+
     // add master playlist controller options
     this.options_.url = this.source_.src;
     this.options_.tech = this.tech_;
