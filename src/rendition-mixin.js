@@ -64,6 +64,9 @@ class Representation {
       this.width = resolution.width;
       this.height = resolution.height;
     }
+    if (playlist.attributes.NAME) {
+      this.name = playlist.attributes.NAME;
+    }
 
     this.bandwidth = playlist.attributes.BANDWIDTH;
 
