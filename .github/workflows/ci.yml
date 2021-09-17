@@ -15,14 +15,29 @@ jobs:
         with:
           github_token: ${{github.token}}
 
+  # generate our test-type matrix, forks should not run playback tests
+  test-type-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      test-type: ${{steps.test-type-fork.outputs.test_type || steps.test-type.outputs.test_type}}
+    steps:
+      - id: test-type-fork
+        if: ${{github.event.pull_request.head.repo.fork}}
+        run: echo '::set-output name=test_type::["unit", "coverage"]'
+      - id: test-type
+        if: ${{!github.event.pull_request.head.repo.fork}}
+        run: echo '::set-output name=test_type::["unit", "playback", "playback-min", "coverage"]'
+
+
   ci:
-    needs: should-skip
-    if: ${{needs.should-skip.outputs.should-skip-job != 'true'}}
+    needs: [should-skip, test-type-matrix]
+    # 1. always run tests on main, otherwise skip tests if should-skip is true.
+    if: ${{github.ref == 'refs/heads/main' || needs.should-skip.outputs.should-skip-job != 'true'}}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        test-type: [unit, playback]
+        test-type: ${{fromJson(needs.test-type-matrix.outputs.test-type)}}
     env:
       BROWSER_STACK_USERNAME: ${{secrets.BROWSER_STACK_USERNAME}}
       BROWSER_STACK_ACCESS_KEY: ${{secrets.BROWSER_STACK_ACCESS_KEY}}
@@ -32,17 +47,6 @@ jobs:
     - name: checkout code
       uses: actions/checkout@v2
 
-    - name: Cache dependencies
-      uses: actions/cache@v2
-      with:
-        path: |
-          ~/.npm
-          **/node_modules
-        key: ${{runner.os}}-npm-${{hashFiles('**/package-lock.json')}}
-        restore-keys: |
-          ${{runner.os}}-npm-
-          ${{runner.os}}-
-
     - name: read node version from .nvmrc
       run: echo ::set-output name=NVMRC::$(cat .nvmrc)
       shell: bash
@@ -50,20 +54,21 @@ jobs:
 
     - name: update apt cache on linux w/o browserstack
       run: sudo apt-get update
-      if: ${{startsWith(matrix.os, 'ubuntu') && !env.BROWSER_STACK_USERNAME}}
+      if: ${{startsWith(matrix.os, 'ubuntu')}}
 
     - name: install ffmpeg/pulseaudio for firefox on linux w/o browserstack
       run: sudo apt-get install ffmpeg pulseaudio
-      if: ${{startsWith(matrix.os, 'ubuntu') && !env.BROWSER_STACK_USERNAME}}
+      if: ${{startsWith(matrix.os, 'ubuntu')}}
 
     - name: start pulseaudio for firefox on linux w/o browserstack
       run: pulseaudio -D
-      if: ${{startsWith(matrix.os, 'ubuntu') && !env.BROWSER_STACK_USERNAME}}
+      if: ${{startsWith(matrix.os, 'ubuntu')}}
 
     - name: setup node
-      uses: actions/setup-node@v1
+      uses: actions/setup-node@v2
       with:
         node-version: '${{steps.nvm.outputs.NVMRC}}'
+        cache: npm
 
     # turn off the default setup-node problem watchers...
     - run: echo "::remove-matcher owner=eslint-compact::"
@@ -77,3 +82,11 @@ jobs:
       uses: GabrielBB/xvfb-action@v1
       with:
         run: npm run test
+
+    - name: coverage
+      uses: codecov/codecov-action@v1
+      with:
+        token: ${{secrets.CODECOV_TOKEN}}
+        files: './test/dist/coverage/coverage-final.json'
+        fail_ci_if_error: true
+      if: ${{startsWith(env.CI_TEST_TYPE, 'coverage')}}

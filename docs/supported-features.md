@@ -59,11 +59,11 @@ not meant serve as an exhaustive list.
 * Any browser supported resolution (e.g., 4k)
 * Any browser supported framerate (e.g., 60fps)
 * [DRM] via [videojs-contrib-eme]
-* Audio only (non DRM)
-* Video only (non DRM)
+* Audio only (non DASH)
+* Video only (non DASH)
 * In-manifest [WebVTT] subtitles are automatically translated into standard HTML5 subtitle
   tracks
-* [AES-128] and SAMPLE-AES segment encryption
+* [AES-128] segment encryption
 
 ## Notable Missing Features
 
@@ -95,10 +95,6 @@ supported when packaged within [TS].
 * [Dolby Digital] Audio (AC-3)
 * [Dolby Digital Plus] (E-AC-3)
 
-### General Missing Features
-
-* Audio/video only DRM streams
-
 ### HLS Missing Features
 
 Note: features for low latency HLS in the [2nd edition of HTTP Live Streaming] are on the
@@ -126,6 +122,7 @@ not yet been implemented. VHS currently supports everything in the
 * Use of AVERAGE-BANDWIDTH in [EXT-X-STREAM-INF] (value parsed but not used)
 * Use of FRAME-RATE in [EXT-X-STREAM-INF] (value parsed but not used)
 * Use of HDCP-LEVEL in [EXT-X-STREAM-INF]
+* SAMPLE-AES segment encryption
 
 In the event of encoding changes within a playlist (see
 https://tools.ietf.org/html/draft-pantos-http-live-streaming-23#section-6.3.3), the
@@ -140,6 +137,7 @@ features in the DASH specification that are not yet implemented in VHS:
 Note that many of the following are parsed by [mpd-parser] but are either not yet used, or
 simply take on their default values (in the case where they have valid defaults).
 
+* Audio and video only streams
 * Audio rendition switching
   * Each video rendition is paired with an audio rendition for the duration of playback.
 * MPD

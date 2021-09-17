@@ -13,7 +13,7 @@ import {
 } from '../src/playback-watcher';
 // needed for plugin registration
 import '../src/videojs-http-streaming';
-import { SAFE_TIME_DELTA } from '../src/ranges';
+import { SAFE_TIME_DELTA, bufferIntersection } from '../src/ranges';
 
 let monitorCurrentTime_;
 
@@ -26,11 +26,13 @@ QUnit.module('PlaybackWatcher', {
     this.old = {};
 
     // setup a player
-    this.player = createPlayer({html5: {
-      vhs: {
-        overrideNative: true
+    this.player = createPlayer({
+      html5: {
+        vhs: {
+          overrideNative: true
+        }
       }
-    }});
+    });
     this.player.muted(true);
     this.player.autoplay(true);
   },
@@ -40,6 +42,192 @@ QUnit.module('PlaybackWatcher', {
     this.mse.restore();
     this.player.dispose();
   }
+});
+
+QUnit.test('skips over gap at beginning of stream if played before content is buffered', function(assert) {
+  let vhsGapSkipEvents = 0;
+  let hlsGapSkipEvents = 0;
+
+  this.player.tech_.on('usage', (event) => {
+    if (event.name === 'vhs-gap-skip') {
+      vhsGapSkipEvents++;
+    }
+    if (event.name === 'hls-gap-skip') {
+      hlsGapSkipEvents++;
+    }
+  });
+
+  // set an arbitrary source
+  this.player.src({
+    src: 'master.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+
+  // start playback normally
+  this.player.tech_.triggerReady();
+  this.clock.tick(1);
+  standardXHRResponse(this.requests.shift());
+  openMediaSource(this.player, this.clock);
+  this.player.tech_.trigger('play');
+  this.player.tech_.trigger('waiting');
+  // create a buffer with a gap of 2 seconds at beginning of stream
+  this.player.tech_.buffered = () => videojs.createTimeRanges([[2, 10]]);
+  // Playback watcher loop runs on a 250ms clock and needs 6 consecutive stall checks before skipping the gap
+  this.clock.tick(250 * 6);
+  // Need to wait for the duration of the gap
+  this.clock.tick(2000);
+
+  assert.equal(vhsGapSkipEvents, 1, 'there is one skipped gap');
+  assert.equal(hlsGapSkipEvents, 1, 'there is one skipped gap');
+
+  // check that player jumped the gap
+  assert.equal(
+    Math.round(this.player.currentTime()),
+    2,
+    'Player seeked over gap after timer'
+  );
+});
+
+QUnit.test('multiple play events do not cause the gap-skipping logic to be called sooner than expected', function(assert) {
+  let vhsGapSkipEvents = 0;
+  let hlsGapSkipEvents = 0;
+
+  this.player.tech_.on('usage', (event) => {
+    if (event.name === 'vhs-gap-skip') {
+      vhsGapSkipEvents++;
+    }
+    if (event.name === 'hls-gap-skip') {
+      hlsGapSkipEvents++;
+    }
+  });
+
+  // set an arbitrary source
+  this.player.src({
+    src: 'master.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+
+  this.player.tech_.triggerReady();
+  this.clock.tick(1);
+  standardXHRResponse(this.requests.shift());
+  openMediaSource(this.player, this.clock);
+  // create a buffer with a gap of 2 seconds at beginning of stream
+  this.player.tech_.buffered = () => videojs.createTimeRanges([[2, 10]]);
+  // Playback watcher loop runs on a 250ms clock and needs 6 consecutive stall checks before skipping the gap
+  // Start with 5 consecutive playback checks
+  this.clock.tick(250 * 5);
+  // and then simulate the playback monitor being called 'manually' by a new play event
+  this.player.tech_.trigger('play');
+  // Need to wait for the duration of the gap
+  this.clock.tick(2000);
+
+  assert.equal(vhsGapSkipEvents, 0, 'there is no skipped gap');
+  assert.equal(hlsGapSkipEvents, 0, 'there is no skipped gap');
+
+  // check that player did not skip the gap
+  assert.equal(
+    Math.round(this.player.currentTime()),
+    0,
+    'Player did not seek over gap'
+  );
+
+  // Simulate remaining time
+  this.clock.tick(250);
+  // Need to wait for the duration of the gap
+  this.clock.tick(2000);
+
+  assert.equal(vhsGapSkipEvents, 1, 'there is one skipped gap');
+  assert.equal(hlsGapSkipEvents, 1, 'there is one skipped gap');
+
+  // check that player did skip the gap after another 250ms has gone by
+  assert.equal(
+    Math.round(this.player.currentTime()),
+    2,
+    'Player did skip the gap'
+  );
+});
+
+QUnit.test('changing sources does not break ability to skip gap at beginning of stream on first play', function(assert) {
+  let vhsGapSkipEvents = 0;
+  let hlsGapSkipEvents = 0;
+
+  this.player.dispose();
+
+  this.player = createPlayer({
+    html5: {
+      vhs: {
+        overrideNative: true
+      }
+    },
+    enableSourceset: true
+  });
+
+  this.player.autoplay(true);
+
+  this.player.tech_.on('usage', (event) => {
+    if (event.name === 'vhs-gap-skip') {
+      vhsGapSkipEvents++;
+    }
+    if (event.name === 'hls-gap-skip') {
+      hlsGapSkipEvents++;
+    }
+  });
+
+  // set an arbitrary source
+  this.player.src({
+    src: 'master.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+  // start playback normally
+  this.player.tech_.triggerReady();
+  this.clock.tick(1);
+  standardXHRResponse(this.requests.shift());
+  openMediaSource(this.player, this.clock);
+  this.player.play();
+  this.player.tech_.trigger('waiting');
+  // create a buffer with a gap of 2 seconds at beginning of stream
+  this.player.tech_.buffered = () => videojs.createTimeRanges([[2, 10]]);
+  // Playback watcher loop runs on a 250ms clock and needs 6 consecutive stall checks before skipping the gap
+  this.clock.tick(250 * 6);
+  // Need to wait for the duration of the gap
+  this.clock.tick(2000);
+
+  assert.equal(vhsGapSkipEvents, 1, 'there is one skipped gap');
+  assert.equal(hlsGapSkipEvents, 1, 'there is one skipped gap');
+
+  // check that player jumped the gap
+  assert.equal(
+    Math.round(this.player.currentTime()),
+    2,
+    'Player seeked over gap after timer'
+  );
+
+  // Simulate the source changing while the player is in a `playing` state
+  vhsGapSkipEvents = 0;
+  hlsGapSkipEvents = 0;
+  this.player.currentTime(0);
+
+  this.player.src({
+    src: 'new-master.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+  openMediaSource(this.player, this.clock);
+  this.clock.tick(1);
+
+  // Playback watcher loop runs on a 250ms clock and needs 6 consecutive stall checks before skipping the gap
+  this.clock.tick(250 * 6);
+  // Need to wait for the duration of the gap
+  this.clock.tick(2000);
+
+  assert.equal(vhsGapSkipEvents, 1, 'there is one skipped gap');
+  assert.equal(hlsGapSkipEvents, 1, 'there is one skipped gap');
+
+  // check that player jumped the gap
+  assert.equal(
+    Math.round(this.player.currentTime()),
+    2,
+    'Player seeked over gap after source changed'
+  );
 });
 
 QUnit.test('skips over gap in firefox with waiting event', function(assert) {
@@ -818,6 +1006,12 @@ QUnit.test('jumps to buffered content if seeking just before', function(assert) 
     currentTime: () => currentTime,
     buffered: () => buffered
   };
+
+  Object.assign(playbackWatcher.masterPlaylistController_.sourceUpdater_, {
+    videoBuffer: true,
+    videoBuffered: () => buffered
+  });
+
   this.player.tech(true).vhs.setCurrentTime = (time) => seeks.push(time);
 
   currentTime = 10;
@@ -852,6 +1046,55 @@ QUnit.test('jumps to buffered content if seeking just before', function(assert) 
   assert.ok(playbackWatcher.fixesBadSeeks_(), 'fixed bad seek');
   assert.equal(seeks.length, 2, 'seeked');
   assert.equal(seeks[1], 11.1, 'seeked to seekable range');
+});
+
+QUnit.test('jumps to correct range with gaps', function(assert) {
+  // target duration is 10 for this manifest
+  this.player.src({
+    src: 'liveStart30sBefore.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+
+  // start playback normally
+  this.player.tech_.triggerReady();
+  this.clock.tick(1);
+  standardXHRResponse(this.requests.shift());
+  openMediaSource(this.player, this.clock);
+  this.player.tech_.trigger('play');
+  this.player.tech_.trigger('playing');
+  this.clock.tick(1);
+
+  const playbackWatcher = this.player.tech_.vhs.playbackWatcher_;
+  const seeks = [];
+  let currentTime;
+  let buffered;
+
+  playbackWatcher.seekable = () => videojs.createTimeRanges([[10, 100]]);
+  playbackWatcher.tech_ = {
+    off: () => {},
+    seeking: () => true,
+    setCurrentTime: (time) => {
+      seeks.push(time);
+    },
+    currentTime: () => currentTime,
+    buffered: () => buffered
+  };
+
+  Object.assign(playbackWatcher.masterPlaylistController_.sourceUpdater_, {
+    videoBuffer: true,
+    videoBuffered: () => buffered
+  });
+
+  this.player.tech(true).vhs.setCurrentTime = (time) => seeks.push(time);
+
+  currentTime = 40;
+  buffered = videojs.createTimeRanges([[19, 39], [41, 70]]);
+  assert.ok(
+    playbackWatcher.fixesBadSeeks_(),
+    'acts when close enough to, and enough, buffer'
+  );
+  assert.equal(seeks.length, 1, 'seeked');
+  assert.equal(seeks[0], 41.1, 'player seeked to the start of the closer buffer');
 });
 
 const loaderTypes = ['audio', 'main', 'subtitle'];
@@ -1019,6 +1262,7 @@ loaderTypes.forEach(function(type) {
 
     expectedUsage['vhs-rendition-blacklisted'] = 1;
     expectedUsage['hls-rendition-blacklisted'] = 1;
+    // expectedUsage['vhs-rendition-change-exclude'] = 1;
 
     assert.deepEqual(this.usageEvents, expectedUsage, 'usage as expected');
 
@@ -1038,7 +1282,7 @@ loaderTypes.forEach(function(type) {
 
     const loader = this.mpc[`${type}SegmentLoader_`];
     const playlists = this.mpc.master().playlists;
-    const excludeAndVerify = () => {
+    const excludeAndVerify = (last) => {
       let oldPlaylist;
       // this test only needs 9 appends, since we do an intial append
 
@@ -1057,6 +1301,9 @@ loaderTypes.forEach(function(type) {
       expectedUsage[`vhs-${type}-download-exclusion`] = 1;
       expectedUsage['vhs-rendition-blacklisted'] = 1;
       expectedUsage['hls-rendition-blacklisted'] = 1;
+      if (!last) {
+        expectedUsage['vhs-rendition-change-exclude'] = 1;
+      }
 
       assert.deepEqual(this.usageEvents, expectedUsage, 'usage as expected');
       this.usageEvents = {};
@@ -1097,7 +1344,7 @@ loaderTypes.forEach(function(type) {
 
     // exclude all playlists and verify
     while (i--) {
-      excludeAndVerify();
+      excludeAndVerify((i === 0));
     }
 
   });
@@ -1111,6 +1358,8 @@ QUnit.module('PlaybackWatcher isolated functions', {
       tech: {
         on: () => {},
         off: () => {},
+        one: () => {},
+        paused: () => false,
         // needed to construct a playback watcher
         options_: {
           playerId: 'mock-player-id'
@@ -1433,10 +1682,10 @@ QUnit.test('respects allowSeeksWithinUnsafeLiveWindow flag', function(assert) {
 
 QUnit.module('closeToBufferedContent');
 
-QUnit.test('false if no buffer', function(assert) {
+QUnit.test('false if zero length videoBuffered', function(assert) {
   assert.notOk(
     closeToBufferedContent({
-      buffered: videojs.createTimeRanges(),
+      videoBuffered: videojs.createTimeRanges(),
       targetDuration: 4,
       currentTime: 10
     }),
@@ -1444,10 +1693,10 @@ QUnit.test('false if no buffer', function(assert) {
   );
 });
 
-QUnit.test('false if buffer less than two times target duration', function(assert) {
+QUnit.test('false if zero length audioBuffered', function(assert) {
   assert.notOk(
     closeToBufferedContent({
-      buffered: videojs.createTimeRanges([[11, 18.9]]),
+      audioBuffered: videojs.createTimeRanges(),
       targetDuration: 4,
       currentTime: 10
     }),
@@ -1455,10 +1704,67 @@ QUnit.test('false if buffer less than two times target duration', function(asser
   );
 });
 
-QUnit.test('false if buffer is beyond target duration from current time', function(assert) {
+QUnit.test('false if zero length audioBuffered and videoBuffered', function(assert) {
   assert.notOk(
     closeToBufferedContent({
-      buffered: videojs.createTimeRanges([[14.1, 30]]),
+      audioBuffered: videojs.createTimeRanges(),
+      videoBuffered: videojs.createTimeRanges(),
+      targetDuration: 4,
+      currentTime: 10
+    }),
+    'returned false'
+  );
+});
+
+QUnit.test('false if videoBuffered less than two times target duration', function(assert) {
+  assert.notOk(
+    closeToBufferedContent({
+      videoBuffered: videojs.createTimeRanges([[11, 18.9]]),
+      targetDuration: 4,
+      currentTime: 10
+    }),
+    'returned false'
+  );
+});
+
+QUnit.test('false if audioBuffered less than two times target duration', function(assert) {
+  assert.notOk(
+    closeToBufferedContent({
+      audioBuffered: videojs.createTimeRanges([[11, 18.9]]),
+      targetDuration: 4,
+      currentTime: 10
+    }),
+    'returned false'
+  );
+});
+
+QUnit.test('false if either buffer is less than two times target duration', function(assert) {
+  assert.notOk(
+    closeToBufferedContent({
+      videoBuffered: videojs.createTimeRanges([[11, 18.9]]),
+      audioBuffered: videojs.createTimeRanges([[11, 18.9]]),
+      targetDuration: 4,
+      currentTime: 10
+    }),
+    'returned false'
+  );
+});
+
+QUnit.test('false if there is not a range ahead', function(assert) {
+  assert.notOk(
+    closeToBufferedContent({
+      videoBuffered: videojs.createTimeRanges([[11, 18.9]]),
+      targetDuration: 4,
+      currentTime: 19
+    }),
+    'returned false'
+  );
+});
+
+QUnit.test('false if buffer is one segment away from current time', function(assert) {
+  assert.notOk(
+    closeToBufferedContent({
+      videoBuffered: videojs.createTimeRanges([[14.1, 30]]),
       targetDuration: 4,
       currentTime: 10
     }),
@@ -1469,7 +1775,7 @@ QUnit.test('false if buffer is beyond target duration from current time', functi
 QUnit.test('true if enough buffer and close to current time', function(assert) {
   assert.ok(
     closeToBufferedContent({
-      buffered: videojs.createTimeRanges([[13.9, 22]]),
+      videoBuffered: videojs.createTimeRanges([[13.9, 22]]),
       targetDuration: 4,
       currentTime: 10
     }),
@@ -1477,13 +1783,47 @@ QUnit.test('true if enough buffer and close to current time', function(assert) {
   );
 });
 
-QUnit.test('false if current time beyond buffer start', function(assert) {
-  assert.notOk(
+QUnit.test('true if enough buffer and close to current time with gaps', function(assert) {
+  assert.ok(
     closeToBufferedContent({
-      buffered: videojs.createTimeRanges([[13.9, 22]]),
+      videoBuffered: videojs.createTimeRanges([[19, 22], [24, 30], [31, 34]]),
       targetDuration: 4,
-      currentTime: 14
+      currentTime: 23
     }),
-    'returned false'
+    'returned true'
+  );
+});
+
+QUnit.test('complex gaps with enough buffer ahead', function(assert) {
+  const audioBuffered = videojs.createTimeRanges([[3095.04, 3095.46], [3095.55, 3110.57]]);
+  const videoBuffered = videojs.createTimeRanges([[3093.15, 3095.55], [3095.62, 3110.64], [3112.34, 3114.34]]);
+  const buffered = bufferIntersection(videoBuffered, audioBuffered);
+
+  assert.ok(
+    closeToBufferedContent({
+      videoBuffered,
+      audioBuffered,
+      buffered,
+      targetDuration: 7,
+      currentTime: 3095.45
+    }),
+    'returned true'
+  );
+});
+
+QUnit.test('another complex gaps with enough buffer ahead', function(assert) {
+  const audioBuffered = videojs.createTimeRanges([[827.32, 832.17], [832.26, 850.12]]);
+  const videoBuffered = videojs.createTimeRanges([[828.89, 832.26], [832.33, 856.35]]);
+  const buffered = bufferIntersection(videoBuffered, audioBuffered);
+
+  assert.ok(
+    closeToBufferedContent({
+      videoBuffered,
+      audioBuffered,
+      buffered,
+      targetDuration: 7,
+      currentTime: 832.16
+    }),
+    'returned true'
   );
 });

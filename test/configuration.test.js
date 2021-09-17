@@ -37,11 +37,6 @@ const options = [{
   test: 5,
   alt: 555
 }, {
-  name: 'smoothQualityChange',
-  default: false,
-  test: true,
-  alt: false
-}, {
   name: 'useBandwidthFromLocalStorage',
   default: false,
   test: true
@@ -322,7 +317,9 @@ QUnit.module('Configuration - Options', {
     this.env.restore();
     videojs.Vhs.supportsNativeHls = this.old.NativeHlsSupport;
 
-    this.player.dispose();
+    if (this.player) {
+      this.player.dispose();
+    }
     videojs.options.vhs = {};
 
   }

@@ -12,35 +12,43 @@
 import videojs from 'video.js';
 
 if (!Object.entries) {
-  Object.entries = function( obj ){
-    var ownProps = Object.keys( obj ),
-      i = ownProps.length,
-      resArray = new Array(i); // preallocate the Array
-    while (i--)
+  Object.entries = function(obj) {
+    const ownProps = Object.keys(obj);
+    let i = ownProps.length;
+    // preallocate the Array
+    const resArray = new Array(i);
+
+    while (i--) {
       resArray[i] = [ownProps[i], obj[ownProps[i]]];
+    }
 
     return resArray;
   };
 }
 
 function addUrlQueryStrings(urlStr, paramArray) {
-  var mainurl = new URL(urlStr);
-  var queryurl = mainurl.search
-  queryurl = queryurl.split('#')[0] // Discard fragment identifier.
-  var urlParams = {}
-  var queryString = queryurl.split('?')[1]
+  const mainurl = new URL(urlStr);
+  let queryurl = mainurl.search;
+  // Discard fragment identifier.
+
+  queryurl = queryurl.split('#')[0];
+  const urlParams = {};
+  let queryString = queryurl.split('?')[1];
+
   if (!queryString) {
     if (queryurl.search('=') !== false) {
-      queryString = queryurl
+      queryString = queryurl;
     }
   }
   if (queryString) {
-    var keyValuePairs = queryString.split('&')
-    for (var i = 0; i < keyValuePairs.length; i++) {
-      var keyValuePair = keyValuePairs[i].split('=')
-      var paramName = keyValuePair[0]
-      var paramValue = keyValuePair[1] || ''
-      urlParams[paramName] = decodeURIComponent(paramValue.replace(/\+/g, ' '))
+    const keyValuePairs = queryString.split('&');
+
+    for (let i = 0; i < keyValuePairs.length; i++) {
+      const keyValuePair = keyValuePairs[i].split('=');
+      const paramName = keyValuePair[0];
+      const paramValue = keyValuePair[1] || '';
+
+      urlParams[paramName] = decodeURIComponent(paramValue.replace(/\+/g, ' '));
     }
   }
 
@@ -48,15 +56,17 @@ function addUrlQueryStrings(urlStr, paramArray) {
     urlParams[key] = value;
   }
 
-  var queryString_new = '';
-  for (var property in urlParams) {
+  let queryStringNew = '';
+
+  for (const property in urlParams) {
     if (urlParams.hasOwnProperty(property)) {
-      if (queryString_new != '')
-        queryString_new += '&';
-      queryString_new += property + "=" + urlParams[property];
+      if (queryStringNew !== '') {
+        queryStringNew += '&';
+      }
+      queryStringNew += property + '=' + urlParams[property];
     }
   }
-  mainurl.search = queryString_new;
+  mainurl.search = queryStringNew;
   return mainurl.toString();
 }
 
@@ -112,7 +122,7 @@ const xhrFactory = function() {
     }, options);
 
     if (window.currentHlsQueryParams !== undefined) {
-        options.uri = addUrlQueryStrings(options.uri, window.currentHlsQueryParams);
+      options.uri = addUrlQueryStrings(options.uri, window.currentHlsQueryParams);
     }
 
     // Allow an optional user-specified function to modify the option
@@ -127,7 +137,11 @@ const xhrFactory = function() {
       }
     }
 
-    const request = videojsXHR(options, function(error, response) {
+    // Use the standard videojs.xhr() method unless `videojs.Vhs.xhr` has been overriden
+    // TODO: switch back to videojs.Vhs.xhr.name === 'XhrFunction' when we drop IE11
+    const xhrMethod = videojs.Vhs.xhr.original === true ? videojsXHR : videojs.Vhs.xhr;
+
+    const request = xhrMethod(options, function(error, response) {
       return callbackWrapper(request, error, response, callback);
     });
     const originalAbort = request.abort;
@@ -140,6 +154,8 @@ const xhrFactory = function() {
     request.requestTime = Date.now();
     return request;
   };
+
+  xhr.original = true;
 
   return xhr;
 };

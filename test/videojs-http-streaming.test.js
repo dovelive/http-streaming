@@ -531,8 +531,6 @@ QUnit.test('stats are reset on each new source', function(assert) {
 
   // media
   this.standardXHRResponse(this.requests.shift());
-  // segment 0
-  this.standardXHRResponse(this.requests.shift(), segment);
 
   this.player.tech(true).vhs.masterPlaylistController_.mainSegmentLoader_.one('appending', () => {
     assert.equal(
@@ -550,6 +548,9 @@ QUnit.test('stats are reset on each new source', function(assert) {
     assert.equal(this.player.tech_.vhs.stats.mediaBytesTransferred, 0, 'stat is reset');
     done();
   });
+
+  // segment 0
+  this.standardXHRResponse(this.requests.shift(), segment);
 });
 
 QUnit.test('XHR requests first byte range on play', function(assert) {
@@ -715,9 +716,6 @@ QUnit.test('codecs are passed to the source buffer', function(assert) {
   // media
   this.standardXHRResponse(this.requests.shift());
 
-  // segment 0
-  this.standardXHRResponse(this.requests.shift(), muxedSegment());
-
   // source buffer won't be created until we have our first segment
   this.player.tech(true).vhs.masterPlaylistController_.mainSegmentLoader_.one('appending', () => {
     // always create separate audio and video source buffers
@@ -734,16 +732,21 @@ QUnit.test('codecs are passed to the source buffer', function(assert) {
     );
     done();
   });
+
+  // segment 0
+  this.standardXHRResponse(this.requests.shift(), muxedSegment());
+
 });
 
 QUnit.test('including HLS as a tech does not error', function(assert) {
-  const player = createPlayer({
+  this.player.dispose();
+  this.player = createPlayer({
     techOrder: ['vhs', 'html5']
   });
 
   this.clock.tick(1);
 
-  assert.ok(player, 'created the player');
+  assert.ok(this.player, 'created the player');
   assert.equal(this.env.log.warn.calls, 2, 'logged two warnings for deprecations');
 });
 
@@ -892,8 +895,6 @@ QUnit.test('starts downloading a segment on loadedmetadata', function(assert) {
 
   // media
   this.standardXHRResponse(this.requests[0]);
-  // segment 0
-  this.standardXHRResponse(this.requests[1], segment);
 
   assert.strictEqual(
     this.requests[1].url,
@@ -911,6 +912,9 @@ QUnit.test('starts downloading a segment on loadedmetadata', function(assert) {
     assert.equal(this.player.tech_.vhs.stats.mediaRequests, 1, '1 request');
     done();
   });
+
+  // segment 0
+  this.standardXHRResponse(this.requests[1], segment);
 });
 
 QUnit.test('re-initializes the handler for each source', function(assert) {
@@ -1061,6 +1065,17 @@ QUnit.test('downloads media playlists after loading the master', function(assert
 
   assert.ok(segmentByteLength, 'the segment has some number of bytes');
 
+  this.player.tech(true).vhs.masterPlaylistController_.mainSegmentLoader_.one('appending', () => {
+    // verify stats
+    assert.equal(
+      this.player.tech_.vhs.stats.mediaBytesTransferred,
+      segmentByteLength,
+      'transferred the segment byte length'
+    );
+    assert.equal(this.player.tech_.vhs.stats.mediaRequests, 1, '1 request');
+    done();
+  });
+
   // segment 0
   this.standardXHRResponse(this.requests[2], segment);
 
@@ -1079,17 +1094,6 @@ QUnit.test('downloads media playlists after loading the master', function(assert
     absoluteUrl('manifest/media2-00001.ts'),
     'first segment requested'
   );
-
-  this.player.tech(true).vhs.masterPlaylistController_.mainSegmentLoader_.one('appending', () => {
-    // verify stats
-    assert.equal(
-      this.player.tech_.vhs.stats.mediaBytesTransferred,
-      segmentByteLength,
-      'transferred the segment byte length'
-    );
-    assert.equal(this.player.tech_.vhs.stats.mediaRequests, 1, '1 request');
-    done();
-  });
 });
 
 QUnit.test('setting bandwidth resets throughput', function(assert) {
@@ -1349,7 +1353,7 @@ QUnit.test('selects a playlist below the current bandwidth', function(assert) {
 });
 
 QUnit.test(
-  'selects a primary rendtion when there are multiple rendtions share same attributes',
+  'selects a primary rendition when there are multiple rendtions share same attributes',
   function(assert) {
     let playlist;
 
@@ -1937,7 +1941,9 @@ QUnit.test('blacklists fmp4 playlists by browser support', function(assert) {
   assert.strictEqual(typeof playlists[2].excludeUntil, 'undefined', 'did not blacklist second playlist');
   assert.deepEqual(debugLogs, [
     `Internal problem encountered with playlist ${playlists[0].id}. browser does not support codec(s): "hvc1". Switching to playlist ${playlists[1].id}.`,
-    `Internal problem encountered with playlist ${playlists[1].id}. browser does not support codec(s): "ac-3". Switching to playlist ${playlists[2].id}.`
+    `switch media ${playlists[0].id} -> ${playlists[1].id} from exclude`,
+    `Internal problem encountered with playlist ${playlists[1].id}. browser does not support codec(s): "ac-3". Switching to playlist ${playlists[2].id}.`,
+    `switch media ${playlists[1].id} -> ${playlists[2].id} from exclude`
   ], 'debug log as expected');
 
   window.MediaSource.isTypeSupported = oldIsTypeSupported;
@@ -2008,7 +2014,9 @@ QUnit.test('blacklists ts playlists by muxer support', function(assert) {
   assert.strictEqual(typeof playlists[2].excludeUntil, 'undefined', 'did not blacklist third playlist');
   assert.deepEqual(debugLogs, [
     `Internal problem encountered with playlist ${playlists[0].id}. muxer does not support codec(s): "hvc1". Switching to playlist ${playlists[1].id}.`,
-    `Internal problem encountered with playlist ${playlists[1].id}. muxer does not support codec(s): "ac-3". Switching to playlist ${playlists[2].id}.`
+    `switch media ${playlists[0].id} -> ${playlists[1].id} from exclude`,
+    `Internal problem encountered with playlist ${playlists[1].id}. muxer does not support codec(s): "ac-3". Switching to playlist ${playlists[2].id}.`,
+    `switch media ${playlists[1].id} -> ${playlists[2].id} from exclude`
   ], 'debug log as expected');
 
   window.MediaSource.isTypeSupported = oldIsTypeSupported;
@@ -2724,86 +2732,6 @@ QUnit.test('if handleManifestRedirects global option is used, it should be passe
   videojs.options.vhs = vhsOptions;
 });
 
-QUnit.test(
-  'if handlePartialData global option is used, it is set on audio/main loader but not subtitle',
-  function(assert) {
-    const vhsOptions = videojs.options.vhs;
-
-    this.player.dispose();
-    videojs.options.vhs = {
-      handlePartialData: true
-    };
-    this.player = createPlayer();
-    this.player.src({
-      src: 'http://example.com/media.m3u8',
-      type: 'application/vnd.apple.mpegurl'
-    });
-
-    this.clock.tick(1);
-
-    openMediaSource(this.player, this.clock);
-    const {mainSegmentLoader_, subtitleSegmentLoader_, audioSegmentLoader_} =
-    this.player.tech(true).vhs.masterPlaylistController_;
-
-    assert.equal(mainSegmentLoader_.handlePartialData_, true, 'is set on main');
-    assert.equal(audioSegmentLoader_.handlePartialData_, true, 'is set on audio');
-    assert.equal(subtitleSegmentLoader_.handlePartialData_, false, 'is not set on subtitle');
-    videojs.options.vhs = vhsOptions;
-  }
-);
-
-QUnit.test(
-  'if handlePartialData source option is used, it is set on audio/main loader but not subtitle',
-  function(assert) {
-    const vhsOptions = videojs.options.vhs;
-
-    this.player.dispose();
-    this.player = createPlayer();
-    this.player.src({
-      src: 'http://example.com/media.m3u8',
-      type: 'application/vnd.apple.mpegurl',
-      handlePartialData: true
-    });
-
-    this.clock.tick(1);
-
-    openMediaSource(this.player, this.clock);
-    const {mainSegmentLoader_, subtitleSegmentLoader_, audioSegmentLoader_} =
-    this.player.tech(true).vhs.masterPlaylistController_;
-
-    assert.equal(mainSegmentLoader_.handlePartialData_, true, 'is set on main');
-    assert.equal(audioSegmentLoader_.handlePartialData_, true, 'is set on audio');
-    assert.equal(subtitleSegmentLoader_.handlePartialData_, false, 'is not set on subtitle');
-    videojs.options.vhs = vhsOptions;
-  }
-);
-
-QUnit.test('the handlePartialData source option overrides the global default', function(assert) {
-  const vhsOptions = videojs.options.vhs;
-
-  this.player.dispose();
-  videojs.options.vhs = {
-    handlePartialData: true
-  };
-  this.player = createPlayer();
-  this.player.src({
-    src: 'http://example.com/media.m3u8',
-    type: 'application/vnd.apple.mpegurl',
-    handlePartialData: false
-  });
-
-  this.clock.tick(1);
-
-  openMediaSource(this.player, this.clock);
-  const {mainSegmentLoader_, subtitleSegmentLoader_, audioSegmentLoader_} =
-    this.player.tech(true).vhs.masterPlaylistController_;
-
-  assert.equal(mainSegmentLoader_.handlePartialData_, false, 'is set on main');
-  assert.equal(audioSegmentLoader_.handlePartialData_, false, 'is set on audio');
-  assert.equal(subtitleSegmentLoader_.handlePartialData_, false, 'is not set on subtitle');
-  videojs.options.vhs = vhsOptions;
-});
-
 QUnit.test('the handleManifestRedirects source option overrides the global default', function(assert) {
   const vhsOptions = videojs.options.vhs;
 
@@ -2985,6 +2913,36 @@ QUnit.test(
     assert.equal(this.player.tech_.vhs.bandwidth, 4194304, 'set bandwidth to default');
   }
 );
+
+QUnit.test('respects initialBandwidth option on the tech', function(assert) {
+  this.player.dispose();
+  this.player = createPlayer({ html5: { initialBandwidth: 0 } });
+
+  this.player.src({
+    src: 'http://example.com/media.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+
+  this.clock.tick(1);
+
+  openMediaSource(this.player, this.clock);
+  assert.equal(this.player.tech_.vhs.bandwidth, 0, 'set bandwidth to 0');
+});
+
+QUnit.test('initialBandwidth option on the tech take precedence on over vhs bandwidth option', function(assert) {
+  this.player.dispose();
+  this.player = createPlayer({ html5: { initialBandwidth: 0, vhs: { bandwidth: 100 } } });
+
+  this.player.src({
+    src: 'http://example.com/media.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+
+  this.clock.tick(1);
+
+  openMediaSource(this.player, this.clock);
+  assert.equal(this.player.tech_.vhs.bandwidth, 0, 'set bandwidth to 0');
+});
 
 QUnit.test('uses default bandwidth if browser is Android', function(assert) {
   this.player.dispose();
@@ -3411,11 +3369,6 @@ QUnit.test('calling play() at the end of a video replays', function(assert) {
   // copy the byte length since the segment bytes get cleared out
   const segmentByteLength = segment.byteLength;
 
-  assert.ok(segmentByteLength, 'the segment has some number of bytes');
-
-  // segment 0
-  this.standardXHRResponse(this.requests.shift(), segment);
-
   this.player.tech(true).vhs.masterPlaylistController_.mainSegmentLoader_.one('appending', () => {
     this.player.tech_.ended = function() {
       return true;
@@ -3434,6 +3387,11 @@ QUnit.test('calling play() at the end of a video replays', function(assert) {
     assert.equal(this.player.tech_.vhs.stats.mediaRequests, 1, '1 request');
     done();
   });
+
+  assert.ok(segmentByteLength, 'the segment has some number of bytes');
+
+  // segment 0
+  this.standardXHRResponse(this.requests.shift(), segment);
 });
 
 QUnit.test('keys are resolved relative to the master playlist', function(assert) {
@@ -3548,7 +3506,8 @@ QUnit.test('keys are not requested when cached key available, cacheEncryptionKey
     mediaSource: mpc.mediaSource,
     segmentLoader: mpc.mainSegmentLoader_,
     clock: this.clock,
-    segment: encryptedSegment()
+    segment: encryptedSegment(),
+    decryptionTicks: true
   }).then(() => {
     assert.equal(this.requests.length, 1, 'requested a segment, not a key');
     assert.equal(
@@ -3603,7 +3562,8 @@ QUnit.test('keys are requested per segment, cacheEncryptionKeys:false', function
     mediaSource: mpc.mediaSource,
     segmentLoader: mpc.mainSegmentLoader_,
     clock: this.clock,
-    segment: encryptedSegment()
+    segment: encryptedSegment(),
+    decryptionTicks: true
   }).then(() => {
     assert.equal(this.requests.length, 2, 'requested a segment and a key');
     assert.equal(
@@ -3718,7 +3678,7 @@ QUnit.test('switching playlists with an outstanding key request aborts request a
   );
 });
 
-QUnit.test('does not download segments if preload option set to none', function(assert) {
+QUnit.test('does not download anything until play if preload option set to none', function(assert) {
   this.player.preload('none');
   this.player.src({
     src: 'master.m3u8',
@@ -3728,19 +3688,23 @@ QUnit.test('does not download segments if preload option set to none', function(
   this.clock.tick(1);
 
   openMediaSource(this.player, this.clock);
-  // master
-  this.standardXHRResponse(this.requests.shift());
-  // media
-  this.standardXHRResponse(this.requests.shift());
   this.clock.tick(10 * 1000);
 
-  this.requests = this.requests.filter(function(request) {
-    return !(/m3u8$/).test(request.uri);
-  });
   assert.equal(this.requests.length, 0, 'did not download any segments');
 
   // verify stats
   assert.equal(this.player.tech_.vhs.stats.bandwidth, 4194304, 'default');
+
+  this.player.tech_.paused = () => false;
+  this.player.tech_.trigger('play');
+
+  // master
+  this.standardXHRResponse(this.requests.shift());
+
+  // media
+  this.standardXHRResponse(this.requests.shift());
+
+  assert.equal(this.requests.length, 1, 'requested segment');
 });
 
 // workaround https://bugzilla.mozilla.org/show_bug.cgi?id=548397
@@ -4267,6 +4231,36 @@ QUnit.test('Allows specifying the beforeRequest function globally', function(ass
   assert.equal(this.player.tech_.vhs.stats.bandwidth, 4194304, 'default');
 });
 
+QUnit.test('Allows specifying custom xhr() function globally', function(assert) {
+  const originalXhr = videojs.Vhs.xhr;
+  let customXhr = false;
+
+  videojs.Vhs.xhr = function(opts, callback) {
+    customXhr = true;
+    return videojs.xhr(opts, function(err, response, body) {
+      callback(err, response);
+    });
+  };
+
+  this.player.src({
+    src: 'master.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+
+  this.clock.tick(1);
+
+  openMediaSource(this.player, this.clock);
+  // master
+  this.standardXHRResponse(this.requests.shift());
+
+  assert.ok(customXhr, 'customXhr was called');
+
+  videojs.Vhs.xhr = originalXhr;
+
+  // verify stats
+  assert.equal(this.player.tech_.vhs.stats.bandwidth, 4194304, 'default');
+});
+
 QUnit.test('Allows overriding the global beforeRequest function', function(assert) {
   let beforeGlobalRequestCalled = 0;
   let beforeLocalRequestCalled = 0;
@@ -4507,6 +4501,102 @@ QUnit.test('configures eme for HLS on source buffer creation', function(assert) 
       }
     }
   }, 'set source eme options');
+});
+
+QUnit.test('eme handles keystatuschange where status is output-restricted', function(assert) {
+  this.player.eme = {
+    options: {
+      previousSetting: 1
+    }
+  };
+  this.player.src({
+    src: 'manifest/master.m3u8',
+    type: 'application/x-mpegURL',
+    keySystems: {
+      keySystem1: {
+        url: 'url1'
+      }
+    }
+  });
+
+  this.clock.tick(1);
+
+  const media = {
+    attributes: {
+      CODECS: 'avc1.420015, mp4a.40.2c'
+    },
+    contentProtection: {
+      keySystem1: {
+        pssh: 'test'
+      }
+    }
+  };
+
+  this.player.tech_.vhs.playlists = {
+    master: { playlists: [media] },
+    media: () => media
+  };
+
+  const excludes = [];
+
+  this.player.tech_.vhs.masterPlaylistController_.blacklistCurrentPlaylist = (exclude) => {
+    excludes.push(exclude);
+  };
+
+  this.player.tech_.vhs.masterPlaylistController_.sourceUpdater_.trigger('createdsourcebuffers');
+  this.player.tech_.trigger({type: 'keystatuschange', status: 'output-restricted'});
+
+  assert.deepEqual(excludes, [{
+    blacklistDuration: Infinity,
+    message: 'DRM keystatus changed to output-restricted. Playlist will fail to play. Check for HDCP content.',
+    playlist: undefined
+  }], 'excluded playlist');
+});
+
+QUnit.test('eme handles keystatuschange where status is usable', function(assert) {
+  this.player.eme = {
+    options: {
+      previousSetting: 1
+    }
+  };
+  this.player.src({
+    src: 'manifest/master.m3u8',
+    type: 'application/x-mpegURL',
+    keySystems: {
+      keySystem1: {
+        url: 'url1'
+      }
+    }
+  });
+
+  this.clock.tick(1);
+
+  const media = {
+    attributes: {
+      CODECS: 'avc1.420015, mp4a.40.2c'
+    },
+    contentProtection: {
+      keySystem1: {
+        pssh: 'test'
+      }
+    }
+  };
+
+  this.player.tech_.vhs.playlists = {
+    master: { playlists: [media] },
+    media: () => media
+  };
+
+  const excludes = [];
+
+  this.player.tech_.vhs.masterPlaylistController_.blacklistCurrentPlaylist = (exclude) => {
+    excludes.push(exclude);
+  };
+
+  this.player.tech_.vhs.masterPlaylistController_.sourceUpdater_.trigger('createdsourcebuffers');
+  this.player.tech_.trigger({type: 'keystatuschange', status: 'usable'});
+
+  assert.deepEqual(excludes, [], 'did not exclude anything');
 });
 
 QUnit.test('integration: configures eme for DASH on source buffer creation', function(assert) {
@@ -5047,6 +5137,7 @@ QUnit[testOrSkip](
       useBandwidthFromLocalStorage: true
     };
     // values must be stored before player is created, otherwise defaults are provided
+    this.player.dispose();
     this.player = createPlayer();
     this.player.tech_.on('usage', usageListener);
     this.player.src({
@@ -5086,8 +5177,6 @@ QUnit.test(
 
     // media
     this.standardXHRResponse(this.requests.shift());
-    // ts
-    this.standardXHRResponse(this.requests.shift(), muxedSegment());
 
     this.player.tech(true).vhs.convertToProgramTime(3, (err, programTime) => {
       assert.deepEqual(
@@ -5384,20 +5473,21 @@ QUnit.test('stats are reset on dispose', function(assert) {
 
   assert.ok(segmentByteLength, 'the segment has some number of bytes');
 
-  // segment 0
-  this.standardXHRResponse(this.requests.shift(), segment);
-
   vhs.masterPlaylistController_.mainSegmentLoader_.on('appending', () => {
     assert.equal(vhs.stats.mediaBytesTransferred, segmentByteLength, 'stat is set');
     vhs.dispose();
     assert.equal(vhs.stats.mediaBytesTransferred, 0, 'stat is reset');
     done();
   });
+
+  // segment 0
+  this.standardXHRResponse(this.requests.shift(), segment);
+
 });
 
 // mocking the fullscreenElement no longer works, find another way to mock
 // fullscreen behavior(without user gesture)
-QUnit.skip('detects fullscreen and triggers a smooth quality change', function(assert) {
+QUnit.skip('detects fullscreen and triggers a fast quality change', function(assert) {
   const vhs = VhsSourceHandler.handleSource({
     src: 'manifest/master.m3u8',
     type: 'application/vnd.apple.mpegurl'
@@ -5413,7 +5503,7 @@ QUnit.skip('detects fullscreen and triggers a smooth quality change', function(a
     }
   });
 
-  vhs.masterPlaylistController_.smoothQualityChange_ = function() {
+  vhs.masterPlaylistController_.fastQualityChange_ = function() {
     qualityChanges++;
   };
 
@@ -5423,12 +5513,19 @@ QUnit.skip('detects fullscreen and triggers a smooth quality change', function(a
 
   assert.equal(qualityChanges, 1, 'made a fast quality change');
 
+  let checkABRCalls = 0;
+
+  vhs.masterPlaylistController_.checkABR_ = () => checkABRCalls++;
+
   // don't do a fast quality change when returning from fullscreen;
-  // allow the video element to rescale the already buffered video
+  //
+  // do check the current rendition to see if it should be changed for the next
+  // segment loaded
   document[fullscreenElementName] = null;
   Events.trigger(document, 'fullscreenchange');
 
   assert.equal(qualityChanges, 1, 'did not make another quality change');
+  assert.equal(checkABRCalls, 1, 'called to check the ABR');
   vhs.dispose();
 });
 
@@ -5816,6 +5913,61 @@ QUnit.test('emeKeySystems adds content types for all keySystems', function(asser
       }
     },
     'added content types'
+  );
+});
+
+QUnit.test('emeKeySystems supports audio only', function(assert) {
+  assert.deepEqual(
+    emeKeySystems(
+      { keySystem1: {}, keySystem2: {} },
+      { attributes: { CODECS: 'mp4a.40.2c' } },
+    ),
+    {
+      keySystem1: {
+        audioContentType: 'audio/mp4;codecs="mp4a.40.2c"'
+      },
+      keySystem2: {
+        audioContentType: 'audio/mp4;codecs="mp4a.40.2c"'
+      }
+    },
+    'added content type'
+  );
+});
+
+QUnit.test('emeKeySystems supports external audio only', function(assert) {
+  assert.deepEqual(
+    emeKeySystems(
+      { keySystem1: {}, keySystem2: {} },
+      { attributes: {} },
+      { attributes: { CODECS: 'mp4a.40.2c' } },
+    ),
+    {
+      keySystem1: {
+        audioContentType: 'audio/mp4;codecs="mp4a.40.2c"'
+      },
+      keySystem2: {
+        audioContentType: 'audio/mp4;codecs="mp4a.40.2c"'
+      }
+    },
+    'added content type'
+  );
+});
+
+QUnit.test('emeKeySystems supports video only', function(assert) {
+  assert.deepEqual(
+    emeKeySystems(
+      { keySystem1: {}, keySystem2: {} },
+      { attributes: { CODECS: 'avc1.420015' } },
+    ),
+    {
+      keySystem1: {
+        videoContentType: 'video/mp4;codecs="avc1.420015"'
+      },
+      keySystem2: {
+        videoContentType: 'video/mp4;codecs="avc1.420015"'
+      }
+    },
+    'added content type'
   );
 });
 
