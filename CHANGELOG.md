@@ -1,3 +1,65 @@
+<a name="2.12.0"></a>
+# [2.12.0](https://github.com/videojs/http-streaming/compare/v2.11.2...v2.12.0) (2021-11-08)
+
+### Features
+
+* Add an option to use the NetworkInformation API, when available ([#1218](https://github.com/videojs/http-streaming/issues/1218)) ([061cf3c](https://github.com/videojs/http-streaming/commit/061cf3c))
+
+### Tests
+
+* Don't run networkInfo tests against ie11 ([#1221](https://github.com/videojs/http-streaming/issues/1221)) ([aaedde3](https://github.com/videojs/http-streaming/commit/aaedde3))
+
+<a name="2.11.2"></a>
+## [2.11.2](https://github.com/videojs/http-streaming/compare/v2.11.1...v2.11.2) (2021-10-27)
+
+### Bug Fixes
+
+* Various fixes for llhls so that we start closer to live, and stay closer to live ([#1201](https://github.com/videojs/http-streaming/issues/1201)) ([bf4a458](https://github.com/videojs/http-streaming/commit/bf4a458))
+
+<a name="2.11.1"></a>
+## [2.11.1](https://github.com/videojs/http-streaming/compare/v2.11.0...v2.11.1) (2021-10-14)
+
+### Bug Fixes
+
+* **package:** update mpd-parser to 0.19.2 ([#1211](https://github.com/videojs/http-streaming/issues/1211)) ([7420296](https://github.com/videojs/http-streaming/commit/7420296))
+* **package:** update mux.js to 5.14.1 ([#1215](https://github.com/videojs/http-streaming/issues/1215)) ([d7f6b63](https://github.com/videojs/http-streaming/commit/d7f6b63))
+* reset transmuxer in resetEverything to fix seeking backwards in some cases ([#1213](https://github.com/videojs/http-streaming/issues/1213)) ([a83ea37](https://github.com/videojs/http-streaming/commit/a83ea37))
+
+### Chores
+
+* add mux's ll-hls test stream ([#1214](https://github.com/videojs/http-streaming/issues/1214)) ([fc83109](https://github.com/videojs/http-streaming/commit/fc83109))
+
+<a name="2.11.0"></a>
+# [2.11.0](https://github.com/videojs/http-streaming/compare/v2.10.3...v2.11.0) (2021-09-22)
+
+### Features
+
+* Add ability to pass encoding value for 708 captions via captionServices ([#1194](https://github.com/videojs/http-streaming/issues/1194)) ([e2b46e7](https://github.com/videojs/http-streaming/commit/e2b46e7))
+
+### Bug Fixes
+
+* do not try to save expired segment information for gaps greater than 86400 ([#1204](https://github.com/videojs/http-streaming/issues/1204)) ([0dc0b61](https://github.com/videojs/http-streaming/commit/0dc0b61))
+* mark global/window/document as external globals ([#1205](https://github.com/videojs/http-streaming/issues/1205)) ([324af10](https://github.com/videojs/http-streaming/commit/324af10))
+* Only check/fix bad seeks after seeking, without seeked, and an append ([#1195](https://github.com/videojs/http-streaming/issues/1195)) ([9d6505a](https://github.com/videojs/http-streaming/commit/9d6505a))
+* use URL to add searchParams for LLHLS ([#1199](https://github.com/videojs/http-streaming/issues/1199)) ([a8d3c1a](https://github.com/videojs/http-streaming/commit/a8d3c1a))
+
+### Chores
+
+* upgrade to node 14 ([#1207](https://github.com/videojs/http-streaming/issues/1207)) ([7566ca0](https://github.com/videojs/http-streaming/commit/7566ca0))
+
+### Tests
+
+* fix ie 11 race condition in tests ([#1200](https://github.com/videojs/http-streaming/issues/1200)) ([1517386](https://github.com/videojs/http-streaming/commit/1517386))
+* skip test on ie 11 ([#1206](https://github.com/videojs/http-streaming/issues/1206)) ([6d0cbd1](https://github.com/videojs/http-streaming/commit/6d0cbd1))
+
+<a name="2.10.3"></a>
+## [2.10.3](https://github.com/videojs/http-streaming/compare/v2.10.2...v2.10.3) (2021-09-03)
+
+### Bug Fixes
+
+* only register reloadSourceOnError once ([#1191](https://github.com/videojs/http-streaming/issues/1191)) ([9aeb77b](https://github.com/videojs/http-streaming/commit/9aeb77b))
+* We should skip gaps that are seeked into. ([#1192](https://github.com/videojs/http-streaming/issues/1192)) ([61b8eef](https://github.com/videojs/http-streaming/commit/61b8eef))
+
 <a name="2.10.3"></a>
 ## [2.10.3](https://github.com/videojs/http-streaming/compare/v2.10.2...v2.10.3) (2021-09-03)
 

@@ -2,6 +2,7 @@ import Playlist from '../src/playlist';
 import PlaylistLoader from '../src/playlist-loader';
 import QUnit from 'qunit';
 import xhrFactory from '../src/xhr';
+import videojs from 'video.js';
 import { useFakeEnvironment } from './test-helpers';
 // needed for plugin registration
 import '../src/videojs-http-streaming';
@@ -279,6 +280,96 @@ QUnit.module('Playlist', function() {
     assert.equal(Playlist.duration(playlist, 0), 0, 'zero-length duration is zero');
     assert.equal(Playlist.duration(playlist, 0, false), 0, 'zero-length duration is zero');
     assert.equal(Playlist.duration(playlist, -1), 0, 'negative length duration is zero');
+  });
+
+  QUnit.test('accounts for preload segment part durations', function(assert) {
+    const duration = Playlist.duration({
+      mediaSequence: 10,
+      endList: true,
+
+      segments: [{
+        duration: 10,
+        uri: '0.ts'
+      }, {
+        duration: 10,
+        uri: '1.ts'
+      }, {
+        duration: 10,
+        uri: '2.ts'
+      }, {
+        duration: 10,
+        uri: '3.ts'
+      }, {
+        preload: true,
+        parts: [
+          {duration: 2},
+          {duration: 2},
+          {duration: 2}
+        ]
+      }]
+    });
+
+    assert.equal(duration, 46, 'includes segments and parts');
+  });
+
+  QUnit.test('accounts for preload segment part and preload hint durations', function(assert) {
+    const duration = Playlist.duration({
+      mediaSequence: 10,
+      endList: true,
+      partTargetDuration: 2,
+      segments: [{
+        duration: 10,
+        uri: '0.ts'
+      }, {
+        duration: 10,
+        uri: '1.ts'
+      }, {
+        duration: 10,
+        uri: '2.ts'
+      }, {
+        duration: 10,
+        uri: '3.ts'
+      }, {
+        preload: true,
+        parts: [
+          {duration: 2},
+          {duration: 2},
+          {duration: 2}
+        ],
+        preloadHints: [
+          {type: 'PART'},
+          {type: 'MAP'}
+        ]
+      }]
+    });
+
+    assert.equal(duration, 48, 'includes segments, parts, and hints');
+  });
+
+  QUnit.test('looks forward for llhls durations', function(assert) {
+    const playlist = {
+      mediaSequence: 12,
+      partTargetDuration: 3,
+      segments: [{
+        duration: 10,
+        uri: '0.ts'
+      }, {
+        duration: 9,
+        uri: '1.ts'
+      }, {
+        end: 40,
+        preload: true,
+        parts: [
+          {duration: 3}
+        ],
+        preloadHints: [
+          {type: 'PART'}
+        ]
+      }]
+    };
+    const duration = Playlist.duration(playlist, playlist.mediaSequence);
+
+    assert.equal(duration, 15, 'used llhls part/preload durations');
   });
 
   QUnit.module('Seekable');
@@ -1372,54 +1463,56 @@ QUnit.module('Playlist', function() {
       }
     );
 
-    QUnit.test('can return a partIndex', function(assert) {
-      this.fakeVhs.options_ = {experimentalLLHLS: true};
-      const loader = new PlaylistLoader('media.m3u8', this.fakeVhs);
+    if (!videojs.browser.IE_VERSION) {
+      QUnit.test('can return a partIndex', function(assert) {
+        this.fakeVhs.options_ = {experimentalLLHLS: true};
+        const loader = new PlaylistLoader('media.m3u8', this.fakeVhs);
 
-      loader.load();
+        loader.load();
 
-      this.requests.shift().respond(
-        200, null,
-        '#EXTM3U\n' +
-        '#EXT-X-MEDIA-SEQUENCE:1001\n' +
-        '#EXTINF:4,\n' +
-        '1001.ts\n' +
-        '#EXTINF:5,\n' +
-        '1002.ts\n' +
-        '#EXT-X-PART:URI="1003.part1.ts",DURATION=1\n' +
-        '#EXT-X-PART:URI="1003.part2.ts",DURATION=1\n' +
-        '#EXT-X-PART:URI="1003.part3.ts",DURATION=1\n' +
-        '#EXT-X-PRELOAD-HINT:TYPE="PART",URI="1003.part4.ts"\n'
-      );
+        this.requests.shift().respond(
+          200, null,
+          '#EXTM3U\n' +
+          '#EXT-X-MEDIA-SEQUENCE:1001\n' +
+          '#EXTINF:4,\n' +
+          '1001.ts\n' +
+          '#EXTINF:5,\n' +
+          '1002.ts\n' +
+          '#EXT-X-PART:URI="1003.part1.ts",DURATION=1\n' +
+          '#EXT-X-PART:URI="1003.part2.ts",DURATION=1\n' +
+          '#EXT-X-PART:URI="1003.part3.ts",DURATION=1\n' +
+          '#EXT-X-PRELOAD-HINT:TYPE="PART",URI="1003.part4.ts"\n'
+        );
 
-      const media = loader.media();
+        const media = loader.media();
 
-      this.defaults = {
-        playlist: media,
-        currentTime: 0,
-        startingSegmentIndex: 0,
-        startingPartIndex: null,
-        startTime: 0
-      };
+        this.defaults = {
+          playlist: media,
+          currentTime: 0,
+          startingSegmentIndex: 0,
+          startingPartIndex: null,
+          startTime: 0
+        };
 
-      assert.deepEqual(
-        this.getMediaInfoForTime({currentTime: 10, startTime: 0}),
-        {segmentIndex: 2, startTime: 9, partIndex: 0},
-        'returns expected part/segment'
-      );
+        assert.deepEqual(
+          this.getMediaInfoForTime({currentTime: 10, startTime: 0}),
+          {segmentIndex: 2, startTime: 9, partIndex: 0},
+          'returns expected part/segment'
+        );
 
-      assert.deepEqual(
-        this.getMediaInfoForTime({currentTime: 11, startTime: 0}),
-        {segmentIndex: 2, startTime: 10, partIndex: 1},
-        'returns expected part/segment'
-      );
+        assert.deepEqual(
+          this.getMediaInfoForTime({currentTime: 11, startTime: 0}),
+          {segmentIndex: 2, startTime: 10, partIndex: 1},
+          'returns expected part/segment'
+        );
 
-      assert.deepEqual(
-        this.getMediaInfoForTime({currentTime: 11, segmentIndex: -15}),
-        {segmentIndex: 2, startTime: 10, partIndex: 1},
-        'returns expected part/segment'
-      );
-    });
+        assert.deepEqual(
+          this.getMediaInfoForTime({currentTime: 11, segmentIndex: -15}),
+          {segmentIndex: 2, startTime: 10, partIndex: 1},
+          'returns expected part/segment'
+        );
+      });
+    }
 
     QUnit.test('liveEdgeDelay works as expected', function(assert) {
       const media = {
@@ -1609,5 +1702,52 @@ QUnit.module('Playlist', function() {
       }), 'audio playlists that are also in groups, without codecs');
 
     });
+  });
+
+  QUnit.module('segmentDurationWithParts');
+
+  QUnit.test('uses normal segment duration', function(assert) {
+    const duration = Playlist.segmentDurationWithParts(
+      {},
+      {duration: 5}
+    );
+
+    assert.equal(duration, 5, 'duration as expected');
+  });
+
+  QUnit.test('preload segment without parts or preload hints', function(assert) {
+    const duration = Playlist.segmentDurationWithParts(
+      {partTargetDuration: 1},
+      {preload: true}
+    );
+
+    assert.equal(duration, 0, 'duration as expected');
+  });
+
+  QUnit.test('preload segment with parts only', function(assert) {
+    const duration = Playlist.segmentDurationWithParts(
+      {partTargetDuration: 1},
+      {preload: true, parts: [{duration: 1}, {duration: 1}]}
+    );
+
+    assert.equal(duration, 2, 'duration as expected');
+  });
+
+  QUnit.test('preload segment with preload hints only', function(assert) {
+    const duration = Playlist.segmentDurationWithParts(
+      {partTargetDuration: 1},
+      {preload: true, preloadHints: [{type: 'PART'}, {type: 'PART'}, {type: 'MAP'}]}
+    );
+
+    assert.equal(duration, 2, 'duration as expected');
+  });
+
+  QUnit.test('preload segment with preload hints and parts', function(assert) {
+    const duration = Playlist.segmentDurationWithParts(
+      {partTargetDuration: 1},
+      {preload: true, parts: [{duration: 1}], preloadHints: [{type: 'PART'}, {type: 'PART'}, {type: 'MAP'}]}
+    );
+
+    assert.equal(duration, 3, 'duration as expected');
   });
 });
