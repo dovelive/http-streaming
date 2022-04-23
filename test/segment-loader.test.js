@@ -28,6 +28,7 @@ import {
   oneSecond as oneSecondSegment,
   audio as audioSegment,
   video as videoSegment,
+  videoDiffPtsDts as videoDiffPtsDtsSegment,
   videoOneSecond as videoOneSecondSegment,
   videoOneSecond1 as videoOneSecond1Segment,
   videoOneSecond2 as videoOneSecond2Segment,
@@ -550,32 +551,40 @@ QUnit.test('uses current time when seekable range is well before current time', 
 QUnit.module('mediaDuration');
 
 QUnit.test('0 when no timing info', function(assert) {
-  assert.equal(mediaDuration({}, {}), 0, '0 when no timing info');
-  assert.equal(mediaDuration({ start: 1 }, { start: 1 }), 0, '0 when no end times');
-  assert.equal(mediaDuration({ end: 1 }, { end: 1 }), 0, '0 when no start times');
+  assert.equal(mediaDuration({}), 0, '0 when no timing info');
+  assert.equal(
+    mediaDuration({audioTimingInfo: {start: 1}, videoTimingInfo: {start: 1}}),
+    0,
+    '0 when no end times'
+  );
+  assert.equal(
+    mediaDuration({audioTimingInfo: {end: 1}, videoTimingInfo: {end: 1}}),
+    0,
+    '0 when no start times'
+  );
 });
 
 QUnit.test('reports audio duration', function(assert) {
   assert.equal(
-    mediaDuration({ start: 1, end: 2 }, {}),
+    mediaDuration({audioTimingInfo: {start: 1, end: 2}}),
     1,
     'audio duration when no video info'
   );
 
   assert.equal(
-    mediaDuration({ start: 1, end: 2 }, { start: 1 }),
+    mediaDuration({audioTimingInfo: {start: 1, end: 2}, videoTimingInfo: {start: 1}}),
     1,
     'audio duration when not enough video info'
   );
 
   assert.equal(
-    mediaDuration({ start: 1, end: 2 }, { end: 3 }),
+    mediaDuration({audioTimingInfo: {start: 1, end: 2}, videoTimingInfo: {end: 3}}),
     1,
     'audio duration when not enough video info'
   );
 
   assert.equal(
-    mediaDuration({ start: 1, end: 3 }, { start: 1, end: 2 }),
+    mediaDuration({audioTimingInfo: {start: 1, end: 3}, videoTimingInfo: {start: 1, end: 2}}),
     2,
     'audio duration when audio duration > video duration'
   );
@@ -583,25 +592,67 @@ QUnit.test('reports audio duration', function(assert) {
 
 QUnit.test('reports video duration', function(assert) {
   assert.equal(
-    mediaDuration({}, { start: 1, end: 2 }),
+    mediaDuration({videoTimingInfo: {start: 1, end: 2}}),
     1,
     'video duration when no audio info'
   );
 
   assert.equal(
-    mediaDuration({ start: 1 }, { start: 1, end: 2 }),
+    mediaDuration({audioTimingInfo: {start: 1}, videoTimingInfo: {start: 1, end: 2}}),
     1,
     'video duration when not enough audio info'
   );
 
   assert.equal(
-    mediaDuration({ end: 3 }, { start: 1, end: 2 }),
+    mediaDuration({audioTimingInfo: {end: 3}, videoTimingInfo: {start: 1, end: 2}}),
     1,
     'video duration when not enough audio info'
   );
 
   assert.equal(
-    mediaDuration({ start: 1, end: 2 }, { start: 1, end: 3 }),
+    mediaDuration({audioTimingInfo: {start: 1, end: 2}, videoTimingInfo: {start: 1, end: 3}}),
+    2,
+    'video duration when video duration > audio duration'
+  );
+});
+
+if (window.BigInt) {
+  QUnit.test('handles bigint', function(assert) {
+    assert.equal(
+      mediaDuration({audioTimingInfo: {start: window.BigInt(1), end: window.BigInt(2)}}),
+      1,
+      'audio duration when no video info'
+    );
+
+    assert.equal(
+      mediaDuration({videoTimingInfo: {start: window.BigInt(1), end: window.BigInt(2)}}),
+      1,
+      'video duration when no audio info'
+    );
+  });
+}
+
+QUnit.test('reports video duration', function(assert) {
+  assert.equal(
+    mediaDuration({videoTimingInfo: {start: 1, end: 2}}),
+    1,
+    'video duration when no audio info'
+  );
+
+  assert.equal(
+    mediaDuration({audioTimingInfo: {start: 1}, videoTimingInfo: {start: 1, end: 2}}),
+    1,
+    'video duration when not enough audio info'
+  );
+
+  assert.equal(
+    mediaDuration({audioTimingInfo: {end: 3}, videoTimingInfo: {start: 1, end: 2}}),
+    1,
+    'video duration when not enough audio info'
+  );
+
+  assert.equal(
+    mediaDuration({audioTimingInfo: {start: 1, end: 2}, videoTimingInfo: {start: 1, end: 3}}),
     2,
     'video duration when video duration > audio duration'
   );
@@ -1092,6 +1143,192 @@ QUnit.module('SegmentLoader', function(hooks) {
         });
       }).then(() => {
         assert.equal(this.requests.length, 0, 'only made one request');
+      });
+    });
+
+    QUnit.test('should use video PTS value for timestamp offset calculation when useDtsForTimestampOffset set as false', function(assert) {
+      loader = new SegmentLoader(LoaderCommonSettings.call(this, {
+        loaderType: 'main',
+        segmentMetadataTrack: this.segmentMetadataTrack,
+        useDtsForTimestampOffset: false
+      }), {});
+
+      const playlist = playlistWithDuration(20, { uri: 'playlist.m3u8' });
+
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+        return new Promise((resolve, reject) => {
+          loader.one('appended', resolve);
+          loader.one('error', reject);
+
+          loader.playlist(playlist);
+          loader.load();
+
+          this.clock.tick(100);
+
+          standardXHRResponse(this.requests.shift(), videoDiffPtsDtsSegment());
+        });
+      }).then(() => {
+        assert.equal(
+          loader.sourceUpdater_.videoTimestampOffset(),
+          -playlist.segments[0].videoTimingInfo.transmuxedPresentationStart,
+          'set video timestampOffset'
+        );
+
+        assert.equal(
+          loader.sourceUpdater_.audioTimestampOffset(),
+          -playlist.segments[0].videoTimingInfo.transmuxedPresentationStart,
+          'set audio timestampOffset'
+        );
+      });
+    });
+
+    QUnit.test('should use video DTS value for timestamp offset calculation when useDtsForTimestampOffset set as true', function(assert) {
+      loader = new SegmentLoader(LoaderCommonSettings.call(this, {
+        loaderType: 'main',
+        segmentMetadataTrack: this.segmentMetadataTrack,
+        useDtsForTimestampOffset: true
+      }), {});
+
+      const playlist = playlistWithDuration(20, { uri: 'playlist.m3u8' });
+
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+        return new Promise((resolve, reject) => {
+          loader.one('appended', resolve);
+          loader.one('error', reject);
+
+          loader.playlist(playlist);
+          loader.load();
+
+          this.clock.tick(100);
+          // segment
+          standardXHRResponse(this.requests.shift(), videoDiffPtsDtsSegment());
+        });
+      }).then(() => {
+        assert.equal(
+          loader.sourceUpdater_.videoTimestampOffset(),
+          -playlist.segments[0].videoTimingInfo.transmuxedDecodeStart,
+          'set video timestampOffset'
+        );
+
+        assert.equal(
+          loader.sourceUpdater_.audioTimestampOffset(),
+          -playlist.segments[0].videoTimingInfo.transmuxedDecodeStart,
+          'set audio timestampOffset'
+        );
+      });
+    });
+
+    QUnit.test('should use video DTS value as primary for muxed segments (eg: audio and video together) for timestamp offset calculation when useDtsForTimestampOffset set as true', function(assert) {
+      loader = new SegmentLoader(LoaderCommonSettings.call(this, {
+        loaderType: 'main',
+        segmentMetadataTrack: this.segmentMetadataTrack,
+        useDtsForTimestampOffset: true
+      }), {});
+
+      const playlist = playlistWithDuration(20, { uri: 'playlist.m3u8' });
+
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+        return new Promise((resolve, reject) => {
+          loader.one('appended', resolve);
+          loader.one('error', reject);
+
+          loader.playlist(playlist);
+          loader.load();
+
+          this.clock.tick(100);
+
+          standardXHRResponse(this.requests.shift(), muxedSegment());
+        });
+      }).then(() => {
+        assert.equal(
+          loader.sourceUpdater_.videoTimestampOffset(),
+          -playlist.segments[0].videoTimingInfo.transmuxedDecodeStart,
+          'set video timestampOffset'
+        );
+
+        assert.equal(
+          loader.sourceUpdater_.audioTimestampOffset(),
+          -playlist.segments[0].videoTimingInfo.transmuxedDecodeStart,
+          'set audio timestampOffset'
+        );
+      });
+    });
+
+    QUnit.test('should use audio DTS value for timestamp offset calculation when useDtsForTimestampOffset set as true and only audio', function(assert) {
+      loader = new SegmentLoader(LoaderCommonSettings.call(this, {
+        loaderType: 'main',
+        segmentMetadataTrack: this.segmentMetadataTrack,
+        useDtsForTimestampOffset: true
+      }), {});
+
+      const playlist = playlistWithDuration(20, { uri: 'playlist.m3u8' });
+
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_, { isAudioOnly: true }).then(() => {
+        return new Promise((resolve, reject) => {
+          loader.one('appended', resolve);
+          loader.one('error', reject);
+
+          loader.playlist(playlist);
+          loader.load();
+
+          this.clock.tick(100);
+          // segment
+          standardXHRResponse(this.requests.shift(), audioSegment());
+        });
+      }).then(() => {
+        assert.equal(
+          loader.sourceUpdater_.audioTimestampOffset(),
+          -playlist.segments[0].audioTimingInfo.transmuxedDecodeStart,
+          'set audio timestampOffset'
+        );
+      });
+    });
+
+    QUnit.test('should fallback to segment\'s start time when there is no transmuxed content (eg: mp4) and useDtsForTimestampOffset is set as true', function(assert) {
+      loader = new SegmentLoader(LoaderCommonSettings.call(this, {
+        loaderType: 'main',
+        segmentMetadataTrack: this.segmentMetadataTrack,
+        useDtsForTimestampOffset: true
+      }), {});
+
+      const playlist = playlistWithDuration(10);
+      const ogPost = loader.transmuxer_.postMessage;
+
+      loader.transmuxer_.postMessage = (message) => {
+        if (message.action === 'probeMp4StartTime') {
+          const evt = newEvent('message');
+
+          evt.data = {action: 'probeMp4StartTime', startTime: 11, data: message.data};
+
+          loader.transmuxer_.dispatchEvent(evt);
+          return;
+        }
+        return ogPost.call(loader.transmuxer_, message);
+      };
+
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+        return new Promise((resolve, reject) => {
+          loader.one('appended', resolve);
+          loader.one('error', reject);
+
+          playlist.segments.forEach((segment) => {
+            segment.map = {
+              resolvedUri: 'init.mp4',
+              byterange: { length: Infinity, offset: 0 }
+            };
+          });
+          loader.playlist(playlist);
+          loader.load();
+
+          this.clock.tick(100);
+          // init
+          standardXHRResponse(this.requests.shift(), mp4VideoInitSegment());
+          // segment
+          standardXHRResponse(this.requests.shift(), mp4VideoSegment());
+        });
+      }).then(() => {
+        assert.equal(loader.sourceUpdater_.videoTimestampOffset(), -11, 'set video timestampOffset');
+        assert.equal(loader.sourceUpdater_.audioTimestampOffset(), -11, 'set audio timestampOffset');
       });
     });
 
