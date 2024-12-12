@@ -6,7 +6,7 @@
   <link rel="icon" href="logo.svg">
   <link href="node_modules/bootstrap/dist/css/bootstrap.css" rel="stylesheet">
   <link href="node_modules/video.js/dist/video-js.css" rel="stylesheet">
-  <link href="node_modules/videojs-http-source-selector/dist/videojs-http-source-selector.css" rel="stylesheet">
+  <link rel="stylesheet" href="node_modules/videojs-contrib-quality-menu/dist/videojs-contrib-quality-menu.css">
   <style>
     .form-check {
       background-color: hsl(0, 0%, 90%);
@@ -24,24 +24,14 @@
     #segment-metadata pre {
       overflow: scroll;
     }
+    button.btn-outline-secondary:hover svg,
+    button.btn-success svg,
+    button.btn-danger svg {
+      fill: white;
+    }
   </style>
 </head>
 <body class="m-4">
-  <script>
-    // if we're on IE, load up the load index page
-    var result = (/MSIE\s(\d+)\.\d/).exec(navigator.userAgent);
-    var version = result && parseFloat(result[1]);
-
-    if (!version && (/Trident\/7.0/i).test(navigator.userAgent) && (/rv:11.0/).test(navigator.userAgent)) {
-      // IE 11 has a different user agent string than other IE versions
-      version = 11.0;
-    }
-
-    if (version) {
-      window.location.href = './old-index.html';
-    }
-  </script>
-
   <header class="container-fluid">
     <a href="https://github.com/videojs/http-streaming" class="d-flex align-items-center pb-3 mb-5 border-bottom" style="height: 4em">
       <img src="./logo.svg" alt="VHS logo showcasing a VHS tape with the Video.js logo on the label" class="rounded mh-100">
@@ -63,6 +53,12 @@
     </li>
     <li class="nav-item" role="presentation">
       <button class="nav-link" id="profile-tab" data-bs-toggle="tab" data-bs-target="#player-stats" type="button" role="tab" aria-selected="false">Player Stats</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="profile-tab" data-bs-toggle="tab" data-bs-target="#content-steering" type="button" role="tab" aria-selected="false">Content Steering</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="profile-tab" data-bs-toggle="tab" data-bs-target="#export-logs" type="button" role="tab" aria-selected="false">Logs</button>
     </li>
   </ul>
 
@@ -182,8 +178,18 @@
         </div>
 
         <div class="form-check">
+          <input id=use-mms type="checkbox" class="form-check-input" checked>
+          <label class="form-check-label" for="use-mms">[EXPERIMENTAL] Use ManagedMediaSource if available. Use in combination with override native (reloads player)</label>
+        </div>
+
+        <div class="form-check">
           <input id=mirror-source type="checkbox" class="form-check-input" checked>
           <label class="form-check-label" for="mirror-source">Mirror sources from player.src (reloads player, uses EXPERIMENTAL sourceset option)</label>
+        </div>
+
+        <div class="form-check">
+          <input id="forced-subtitles" type="checkbox" class="form-check-input">
+          <label class="form-check-label" for="forced-subtitles">Use Forced Subtitles (reloads player)</label>
         </div>
 
         <div class="input-group">
@@ -231,7 +237,48 @@
         <ul id="segment-metadata" class="col-8"></ul>
       </div>
     </div>
+
+    <div class="tab-pane" id="content-steering" role="tabpanel">
+      <div class="row">
+        <div class="content-steering col-8">
+          <dl>
+            <dt>Current Pathway:</dt>
+            <dd class="current-pathway"></dd>
+            <dt>Available Pathways:</dt>
+            <dd class="available-pathways"></dd>
+            <dt>Steering Manifest:</dt>
+            <dd class="steering-manifest"></dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane" id="export-logs" role="historypanel">
+      <div class="row">
+        <div class="export-logs col-8">
+          <p>Download or copy the player logs, which should be included when submitting a playback issue.</p>
+          <p>To insert a comment into the player log, use <code>player.log()</code> in the console, e.g. <code>player.log('Seeking to 500');player.currentTime(500);</code></p>
+          <button id="download-logs" class="btn btn-outline-secondary">
+            <span class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#5f6368">
+               <path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/>
+             </svg>
+           </span>
+           Download player logs
+          </button>
+          <button id="copy-logs" class="btn btn-outline-secondary">
+            <span class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#5f6368">
+                <path d="M360-240q-33 0-56.5-23.5T280-320v-480q0-33 23.5-56.5T360-880h360q33 0 56.5 23.5T800-800v480q0 33-23.5 56.5T720-240H360Zm0-80h360v-480H360v480ZM200-80q-33 0-56.5-23.5T120-160v-560h80v560h440v80H200Zm160-240v-480 480Z"/>
+              </svg>
+            </span>
+            Copy player logs to clipboard
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
+
 
   <footer class="text-center p-3" id=unit-test-link>
     <a href="test/debug.html">Run unit tests</a>

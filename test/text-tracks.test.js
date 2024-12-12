@@ -5,7 +5,8 @@ import {
   addCaptionData,
   createMetadataTrackIfNotExists,
   addMetadata,
-  removeDuplicateCuesFromTrack
+  removeDuplicateCuesFromTrack,
+  addDateRangeMetadata
 } from '../src/util/text-tracks';
 
 const { module, test } = Qunit;
@@ -180,6 +181,63 @@ test('creates cues for 608 captions with "stream" property in ccX', function(ass
   );
 });
 
+test('creates cues for 608 captions with "content" property for positioning', function(assert) {
+  addCaptionData({
+    inbandTextTracks: this.inbandTextTracks,
+    timestampOffset: this.timestampOffset,
+    captionArray: [
+      {
+        startTime: 0,
+        endTime: 1,
+        content: [
+          {
+            text: 'CC1',
+            position: 10,
+            line: 15
+          },
+          {
+            text: 'text',
+            position: 15,
+            line: 14
+          }
+        ],
+        stream: 'CC1'
+      },
+      {
+        startTime: 0,
+        endTime: 1,
+        content: [{
+          text: 'CC2 text',
+          position: 80,
+          line: 1
+        }],
+        stream: 'CC2'
+      }
+    ]
+  });
+
+  // CC1
+  assert.strictEqual(this.inbandTextTracks.CC1.cues.length, 2, 'added two 608 cues to CC1');
+
+  // CC1 cue 1
+  assert.strictEqual(this.inbandTextTracks.CC1.cues[0].text, 'CC1', 'added text to first cue in CC1');
+  assert.strictEqual(this.inbandTextTracks.CC1.cues[0].line, 15, 'added line to first cue in CC1');
+  assert.strictEqual(this.inbandTextTracks.CC1.cues[0].position, 10, 'added position to first cue in CC1');
+
+  // CC1 cue 2
+  assert.strictEqual(this.inbandTextTracks.CC1.cues[1].text, 'text', 'added text to second cue in CC1');
+  assert.strictEqual(this.inbandTextTracks.CC1.cues[1].line, 14, 'added line to second cue in CC1');
+  assert.strictEqual(this.inbandTextTracks.CC1.cues[1].position, 15, 'added position to second cue in CC1');
+
+  // CC2
+  assert.strictEqual(this.inbandTextTracks.CC2.cues.length, 1, 'added one 608 cue to CC2');
+  assert.strictEqual(this.inbandTextTracks.CC2.cues[0].text, 'CC2 text', 'added text to CC2');
+  assert.strictEqual(this.inbandTextTracks.CC2.cues[0].line, 1, 'added line to CC2');
+  assert.strictEqual(this.inbandTextTracks.CC2.cues[0].position, 80, 'added position to CC2');
+  assert.strictEqual(this.inbandTextTracks.CC2.cues[0].align, 'left', 'left align 608 cues');
+  assert.strictEqual(this.inbandTextTracks.CC2.cues[0].positionAlign, 'line-left', 'left align position on 608 cues');
+});
+
 test('use existing tracks with id equal to CC#', function(assert) {
   const tech = new MockTech();
   const inbandTextTracks = {};
@@ -271,6 +329,111 @@ test('does nothing if there is no metadataTrack or no metadata cues given', func
     0,
     'no metadata cues are added'
   );
+});
+
+test('daterange text track cues', function(assert) {
+  const inbandTextTracks = {
+    metadataTrack_: new MockTextTrack()
+  };
+  const dateRanges = [{
+    endDate: new Date(5000).toString(),
+    endTime: 3,
+    id: 'testId',
+    plannedDuration: 5,
+    processDateRange: () => {},
+    scte35Out: '0xFC30200FFF00F0500D00E4612424',
+    startDate: new Date(2500),
+    startTime: 0.5
+  }];
+
+  inbandTextTracks.metadataTrack_.cues_ = [];
+  addDateRangeMetadata({
+    inbandTextTracks,
+    dateRanges
+  });
+
+  const expectedCues = [{
+    type: 'com.apple.quicktime.HLS',
+    value: {key: 'PLANNED-DURATION', data: 5},
+    endTime: 3,
+    id: 'testId',
+    startTime: 0.5
+  }, {
+    type: 'com.apple.quicktime.HLS',
+    value: {key: 'SCTE35-OUT', data: new Uint8Array((dateRanges[0].scte35Out).match(/[\dA-F]{2}/gi)).buffer},
+    endTime: 3,
+    id: 'testId',
+    startTime: 0.5
+  }];
+  const actualCues = inbandTextTracks.metadataTrack_.cues.map((cue)=>{
+    return {
+      type: cue.type,
+      value: {key: cue.value.key, data: cue.value.data},
+      endTime: cue.endTime,
+      id: cue.id,
+      startTime: cue.startTime
+    };
+  });
+
+  assert.ok(inbandTextTracks.metadataTrack_, 'metadataTrack exists');
+  assert.equal(inbandTextTracks.metadataTrack_.cues.length, 2, '2 daterange cues are created');
+  assert.deepEqual(actualCues, expectedCues);
+});
+
+test('daterange text track cues -scte35Out/scte35In', function(assert) {
+  const inbandTextTracks = {
+    metadataTrack_: new MockTextTrack()
+  };
+  const dateRanges = [{
+    endDate: new Date(5000).toString(),
+    endTime: 3,
+    id: 'testId',
+    processDateRange: () => {},
+    scte35Out: '0xFC30200FFF1',
+    startDate: new Date(2500),
+    startTime: 0.5
+  }, {
+    endDate: new Date(5000).toString(),
+    endTime: 3,
+    id: 'testId',
+    processDateRange: () => {},
+    scte35In: '0xFC30200FFF2',
+    startDate: new Date(2500),
+    startTime: 0.5
+  }];
+
+  inbandTextTracks.metadataTrack_.cues_ = [];
+  addDateRangeMetadata({
+    inbandTextTracks,
+    dateRanges
+  });
+
+  const expectedCues = [{
+    type: 'com.apple.quicktime.HLS',
+    value: {key: 'SCTE35-OUT', data: new Uint8Array((dateRanges[0].scte35Out).match(/[\dA-F]{2}/gi)).buffer},
+    endTime: 3,
+    id: 'testId',
+    startTime: 0.5
+  }, {
+    type: 'com.apple.quicktime.HLS',
+    value: {key: 'SCTE35-IN', data: new Uint8Array((dateRanges[1].scte35In).match(/[\dA-F]{2}/gi)).buffer},
+    endTime: 3,
+    id: 'testId',
+    startTime: 0.5
+  }];
+  const actualCues = inbandTextTracks.metadataTrack_.cues.map((cue)=>{
+    return {
+      type: cue.type,
+      value: {key: cue.value.key, data: cue.value.data},
+      endTime: cue.endTime,
+      id: cue.id,
+      startTime: cue.startTime
+    };
+  });
+
+  assert.ok(inbandTextTracks.metadataTrack_, 'metadataTrack exists');
+  assert.equal(inbandTextTracks.metadataTrack_.cues.length, 2, '2 daterange cues are created');
+  assert.deepEqual(actualCues, expectedCues);
 });
 
 test('adds cues for each metadata frame seen', function(assert) {

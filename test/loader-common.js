@@ -1,5 +1,4 @@
 import QUnit from 'qunit';
-import videojs from 'video.js';
 import xhrFactory from '../src/xhr';
 import Config from '../src/config';
 import document from 'global/document';
@@ -10,7 +9,7 @@ import {
   standardXHRResponse,
   setupMediaSource
 } from './test-helpers.js';
-import { MasterPlaylistController } from '../src/master-playlist-controller';
+import { PlaylistController } from '../src/playlist-controller';
 import SourceUpdater from '../src/source-updater';
 import SyncController from '../src/sync-controller';
 import TimelineChangeController from '../src/timeline-change-controller';
@@ -26,6 +25,7 @@ import {
   mp4VideoInit as mp4VideoInitSegment,
   videoOneSecond as tsVideoSegment
 } from 'create-test-data!segments';
+import {merge, createTimeRanges} from '../src/util/vjs-compat';
 
 /**
  * beforeEach and afterEach hooks that should be run segment loader tests regardless of
@@ -52,23 +52,31 @@ export const LoaderCommonHooks = {
         playbackRate: () => this.playbackRate,
         currentTime: () => this.currentTime,
         textTracks: () => {},
-        addRemoteTextTrack: () => {},
+        addRemoteTextTrack: (track) => {
+          return track;
+        },
         trigger: () => {}
       }
     };
     this.tech_ = this.fakeVhs.tech_;
     this.goalBufferLength =
-      MasterPlaylistController.prototype.goalBufferLength.bind(this);
+      PlaylistController.prototype.goalBufferLength.bind(this);
     this.mediaSource = new window.MediaSource();
-    this.sourceUpdater = new SourceUpdater(this.mediaSource);
+    this.sourceUpdater_ = new SourceUpdater(this.mediaSource);
+    this.inbandTextTracks_ = {
+      metadataTrack_: {
+        addCue: () => {}
+      }
+    };
     this.syncController = new SyncController();
     this.decrypter = new Decrypter();
     this.timelineChangeController = new TimelineChangeController();
+    this.addMetadataToTextTrack = PlaylistController.prototype.addMetadataToTextTrack.bind(this);
 
     this.video = document.createElement('video');
 
     this.setupMediaSource = (mediaSource, sourceUpdater, options) => {
-      return setupMediaSource(mediaSource, sourceUpdater, videojs.mergeOptions({
+      return setupMediaSource(mediaSource, sourceUpdater, merge({
         videoEl: this.video
       }, options));
     };
@@ -80,7 +88,7 @@ export const LoaderCommonHooks = {
 
     this.env.restore();
     this.decrypter.terminate();
-    this.sourceUpdater.dispose();
+    this.sourceUpdater_.dispose();
     this.timelineChangeController.dispose();
   }
 };
@@ -96,7 +104,7 @@ export const LoaderCommonHooks = {
  *         Settings object containing custom settings merged with defaults
  */
 export const LoaderCommonSettings = function(settings) {
-  return videojs.mergeOptions({
+  return merge({
     vhs: this.fakeVhs,
     currentTime: () => this.currentTime,
     seekable: () => this.seekable,
@@ -105,10 +113,11 @@ export const LoaderCommonSettings = function(settings) {
     duration: () => this.mediaSource.duration,
     goalBufferLength: () => this.goalBufferLength(),
     mediaSource: this.mediaSource,
-    sourceUpdater: this.sourceUpdater,
+    sourceUpdater: this.sourceUpdater_,
     syncController: this.syncController,
     decrypter: this.decrypter,
-    timelineChangeController: this.timelineChangeController
+    timelineChangeController: this.timelineChangeController,
+    addMetadataToTextTrack: this.addMetadataToTextTrack
   }, settings);
 };
 
@@ -131,7 +140,12 @@ export const LoaderCommonFactory = ({
   loaderBeforeEach,
   usesAsyncAppends = true,
   initSegments = true,
-  testData = muxedSegment
+  testData = muxedSegment,
+  // These need to be functions. If you use a value alone, the bytes may be cleared out
+  // after decrypting, leaving an empty segment/key. This usage is consistent with other
+  // segments used in tests.
+  encryptedSegmentFn,
+  encryptedSegmentKeyFn
 }) => {
   let loader;
 
@@ -257,7 +271,7 @@ export const LoaderCommonFactory = ({
         this.clock.tick(1);
         standardXHRResponse(this.requests.shift(), testData());
 
-        loader.buffered_ = () => videojs.createTimeRanges([[
+        loader.buffered_ = () => createTimeRanges([[
           0, Config.GOAL_BUFFER_LENGTH
         ]]);
 
@@ -358,6 +372,22 @@ export const LoaderCommonFactory = ({
       assert.ok(isNaN(loader.roundTrip), 'reset round trip time');
     });
 
+    QUnit.test('segment request timeout triggers timeout event', function(assert) {
+      let timeoutEvents = 0;
+
+      loader.on('timeout', () => timeoutEvents++);
+      loader.playlist(playlistWithDuration(10));
+
+      loader.load();
+      this.clock.tick(1);
+
+      this.requests[0].timedout = true;
+      // arbitrary length of time that should lead to a timeout
+      this.clock.tick(100 * 1000);
+
+      assert.equal(timeoutEvents, 1, 'triggered timeout event');
+    });
+
     QUnit.test('progress on segment requests are redispatched', function(assert) {
       let progressEvents = 0;
 
@@ -393,7 +423,7 @@ export const LoaderCommonFactory = ({
         playlist4.attributes.BANDWIDTH = 7777;
 
         loader.vhs_.playlists = {
-          master: {
+          main: {
             playlists: [
               playlist1,
               playlist2,
@@ -573,7 +603,7 @@ export const LoaderCommonFactory = ({
       QUnit.test('detects init segment changes and downloads it', function(assert) {
         return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_, {isVideoOnly: true}).then(() => {
           const playlist = playlistWithDuration(20);
-          const buffered = videojs.createTimeRanges();
+          const buffered = createTimeRanges();
 
           playlist.segments[0].map = {
             resolvedUri: 'init0',
@@ -805,11 +835,11 @@ export const LoaderCommonFactory = ({
 
         const segmentInfo = loader.pendingSegment_;
 
-        assert.equal(segmentInfo.mediaIndex, 3, 'segmentInfo.mediaIndex starts at 3');
+        assert.equal(segmentInfo.mediaIndex, 4, 'segmentInfo.mediaIndex starts at 4');
         assert.equal(
           this.requests[0].url,
-          '3.ts',
-          'requesting the segment at mediaIndex 3'
+          '4.ts',
+          'requesting the segment at mediaIndex 4'
         );
 
         // Update the playlist shifting the mediaSequence by 2 which will result
@@ -819,8 +849,8 @@ export const LoaderCommonFactory = ({
           endList: false
         }));
 
-        assert.equal(segmentInfo.mediaIndex, 1, 'segmentInfo.mediaIndex is updated to 1');
-        expectedLoaderIndex = 1;
+        assert.equal(segmentInfo.mediaIndex, 2, 'segmentInfo.mediaIndex is updated to 2');
+        expectedLoaderIndex = 2;
 
         standardXHRResponse(this.requests.shift(), testData());
 
@@ -835,7 +865,49 @@ export const LoaderCommonFactory = ({
       });
     });
 
-    QUnit.test('live rendition switch uses resetLoader', function(assert) {
+    QUnit.test('live LLHLS rendition switch uses resetLoader', function(assert) {
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+
+        loader.playlist(playlistWithDuration(50, {
+          mediaSequence: 0,
+          endList: false
+        }));
+
+        loader.load();
+        loader.mediaIndex = 0;
+        let resyncCalled = false;
+        let resetCalled = false;
+        const origReset = loader.resetLoader;
+        const origResync = loader.resyncLoader;
+
+        loader.resetLoader = function() {
+          resetCalled = true;
+          return origReset.call(loader);
+        };
+
+        loader.resyncLoader = function() {
+          resyncCalled = true;
+          return origResync.call(loader);
+        };
+
+        const newPlaylist = playlistWithDuration(50, {
+          mediaSequence: 0,
+          endList: false
+        });
+
+        newPlaylist.uri = 'playlist2.m3u8';
+        newPlaylist.partTargetDuration = 1;
+
+        loader.playlist(newPlaylist);
+
+        assert.true(resetCalled, 'reset was called');
+        assert.true(resyncCalled, 'resync was called');
+
+        return Promise.resolve();
+      });
+    });
+
+    QUnit.test('live rendition switch uses resyncLoader', function(assert) {
       return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
 
         loader.playlist(playlistWithDuration(50, {
@@ -869,8 +941,8 @@ export const LoaderCommonFactory = ({
 
         loader.playlist(newPlaylist);
 
-        assert.true(resetCalled, 'reset was called');
         assert.true(resyncCalled, 'resync was called');
+        assert.false(resetCalled, 'reset was not called');
 
         return Promise.resolve();
       });
@@ -919,16 +991,7 @@ export const LoaderCommonFactory = ({
 
     // only main/fmp4 segment loaders use async appends and parts/partIndex
     if (usesAsyncAppends) {
-      let testFn = 'test';
-
-      if (videojs.browser.IE_VERSION) {
-        testFn = 'skip';
-      }
-
-      // this test has a race condition on ie 11 that causes it to fail some of the time.
-      // Since IE 11 isn't really a priority and it only fails some of the time we decided to
-      // skip this on IE 11.
-      QUnit[testFn]('playlist change before any appends does not error', function(assert) {
+      QUnit.test('playlist change before any appends does not error', function(assert) {
         return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
           loader.playlist(playlistWithDuration(50, {
             uri: 'bar-720.m3u8',
@@ -1243,7 +1306,7 @@ export const LoaderCommonFactory = ({
     QUnit.test(
       'checks the goal buffer configuration every loading opportunity',
       function(assert) {
-        loader.buffered_ = () => videojs.createTimeRanges([[0, 1]]);
+        loader.buffered_ = () => createTimeRanges([[0, 1]]);
         const playlist = playlistWithDuration(20);
 
         loader.mediaIndex = null;
@@ -1267,7 +1330,7 @@ export const LoaderCommonFactory = ({
     QUnit.test(
       'does not choose to request if next index is last, we have ended, and are not seeking',
       function(assert) {
-        loader.buffered_ = () => videojs.createTimeRanges([[0, 1]]);
+        loader.buffered_ = () => createTimeRanges([[0, 1]]);
         const playlist = playlistWithDuration(20);
 
         loader.hasPlayed_ = () => true;
@@ -1287,7 +1350,7 @@ export const LoaderCommonFactory = ({
     QUnit.test(
       'does choose to request if next index is last, we have ended, and are seeking',
       function(assert) {
-        loader.buffered_ = () => videojs.createTimeRanges([[0, 1]]);
+        loader.buffered_ = () => createTimeRanges([[0, 1]]);
         const playlist = playlistWithDuration(20);
 
         loader.hasPlayed_ = () => true;
@@ -1358,7 +1421,7 @@ export const LoaderCommonFactory = ({
     );
 
     QUnit.test('chooses the previous part if not buffered and current is not independent', function(assert) {
-      loader.buffered_ = () => videojs.createTimeRanges();
+      loader.buffered_ = () => createTimeRanges();
       const playlist = playlistWithDuration(50, {llhls: true});
 
       loader.hasPlayed_ = () => true;
@@ -1370,20 +1433,67 @@ export const LoaderCommonFactory = ({
       // force segmentIndex 4 and part 2 to be choosen
       loader.currentTime_ = () => 46;
       // make the previous part indepenent so we go back to it
-      playlist.segments[4].parts[1].independent = true;
+      playlist.segments[4].parts[2].independent = true;
+      // debugger;
       const segmentInfo = loader.chooseNextRequest_();
 
-      assert.equal(segmentInfo.partIndex, 1, 'still chooses partIndex 1');
+      assert.equal(segmentInfo.partIndex, 2, 'still chooses partIndex 2');
       assert.equal(segmentInfo.mediaIndex, 4, 'same segment');
 
       // force segmentIndex 4 and part 0 to be choosen
-      loader.currentTime_ = () => 42;
+      loader.currentTime_ = () => 40;
       // make the previous part independent
       playlist.segments[3].parts[4].independent = true;
       const segmentInfo2 = loader.chooseNextRequest_();
 
       assert.equal(segmentInfo2.partIndex, 4, 'previous part');
       assert.equal(segmentInfo2.mediaIndex, 3, 'previous segment');
+    });
+
+    QUnit.test('chooses the correct next segment if independentSegments is true on the playlist', function(assert) {
+      loader.buffered_ = () => createTimeRanges();
+      const playlist = playlistWithDuration(50, {llhls: true});
+
+      playlist.independentSegments = true;
+
+      loader.hasPlayed_ = () => true;
+      loader.syncPoint_ = null;
+
+      loader.playlist(playlist);
+      loader.load();
+
+      loader.currentTime_ = () => 46;
+      // make the previous part indepenent, ensure we don't go back to that part.
+      playlist.segments[4].parts[1].independent = true;
+      const segmentInfo = loader.chooseNextRequest_();
+
+      assert.equal(segmentInfo.partIndex, 3, 'chooses part 3');
+      assert.equal(segmentInfo.mediaIndex, 4, 'same segment');
+    });
+
+    QUnit.test('chooses the correct next segment if independentSegments is true on the main playlist', function(assert) {
+      loader.buffered_ = () => createTimeRanges();
+      const playlist = playlistWithDuration(50, {llhls: true});
+
+      loader.vhs_.playlists = {
+        main: {
+          independentSegments: true
+        }
+      };
+
+      loader.hasPlayed_ = () => true;
+      loader.syncPoint_ = null;
+
+      loader.playlist(playlist);
+      loader.load();
+
+      loader.currentTime_ = () => 46;
+      // make the previous part indepenent, ensure we don't go back to that part.
+      playlist.segments[4].parts[1].independent = true;
+      const segmentInfo = loader.chooseNextRequest_();
+
+      assert.equal(segmentInfo.partIndex, 3, 'chooses part 3');
+      assert.equal(segmentInfo.mediaIndex, 4, 'same segment');
     });
 
     QUnit.test('processing segment reachable even after playlist update removes it', function(assert) {
@@ -1501,10 +1611,146 @@ export const LoaderCommonFactory = ({
       );
     });
 
+    QUnit.module('Segment Key Caching');
+
+    QUnit.test('segmentKey will cache new encrypted keys with cacheEncryptionKeys true', function(assert) {
+      loader.cacheEncryptionKeys_ = true;
+
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+        loader.playlist(playlistWithDuration(10, { isEncrypted: true }));
+        loader.load();
+        this.clock.tick(1);
+
+        const keyCache = loader.keyCache_;
+        const bytes = new Uint32Array([1, 2, 3, 4]);
+
+        assert.strictEqual(Object.keys(keyCache).length, 0, 'no keys have been cached');
+
+        const result = loader.segmentKey({resolvedUri: 'key.php', bytes});
+
+        assert.deepEqual(result, {resolvedUri: 'key.php'}, 'gets by default');
+        loader.segmentKey({resolvedUri: 'key.php', bytes}, true);
+        assert.deepEqual(keyCache['key.php'].bytes, bytes, 'key has been cached');
+      });
+    });
+
+    QUnit.test('segmentKey will not cache encrypted keys with cacheEncryptionKeys false', function(assert) {
+      loader.cacheEncryptionKeys_ = false;
+
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+        loader.playlist(playlistWithDuration(10, { isEncrypted: true }));
+        loader.load();
+        this.clock.tick(1);
+
+        const keyCache = loader.keyCache_;
+        const bytes = new Uint32Array([1, 2, 3, 4]);
+
+        assert.strictEqual(Object.keys(keyCache).length, 0, 'no keys have been cached');
+        loader.segmentKey({resolvedUri: 'key.php', bytes}, true);
+
+        assert.strictEqual(Object.keys(keyCache).length, 0, 'no keys have been cached');
+      });
+    });
+
+    QUnit.test('segment requests use cached keys when available', function(assert) {
+      loader.cacheEncryptionKeys_ = true;
+
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+        return new Promise((resolve, reject) => {
+          loader.one('appended', resolve);
+          loader.one('error', reject);
+          loader.playlist(playlistWithDuration(20, { isEncrypted: true }));
+
+          // make the keys the same
+          loader.playlist_.segments[1].key =
+            merge({}, loader.playlist_.segments[0].key);
+          // give 2nd key an iv
+          loader.playlist_.segments[1].key.iv = new Uint32Array([0, 1, 2, 3]);
+
+          loader.load();
+          this.clock.tick(1);
+
+          assert.strictEqual(this.requests.length, 2, 'one request');
+          assert.strictEqual(this.requests[0].uri, '0-key.php', 'key request');
+          assert.strictEqual(this.requests[1].uri, '0.ts', 'segment request');
+
+          // key response
+          standardXHRResponse(this.requests.shift(), encryptedSegmentKeyFn());
+          this.clock.tick(1);
+
+          // segment
+          standardXHRResponse(this.requests.shift(), encryptedSegmentFn());
+          this.clock.tick(1);
+
+          // decryption tick for syncWorker
+          this.clock.tick(1);
+
+          // tick for web worker segment probe
+          this.clock.tick(1);
+        });
+      }).then(() => {
+        assert.deepEqual(loader.keyCache_['0-key.php'], {
+          resolvedUri: '0-key.php',
+          bytes: new Uint32Array([609867320, 2355137646, 2410040447, 480344904])
+        }, 'previous key was cached');
+
+        this.clock.tick(1);
+        assert.deepEqual(loader.pendingSegment_.segment.key, {
+          resolvedUri: '0-key.php',
+          uri: '0-key.php',
+          iv: new Uint32Array([0, 1, 2, 3])
+        }, 'used cached key for request and own initialization vector');
+
+        assert.strictEqual(this.requests.length, 1, 'one request');
+        assert.strictEqual(this.requests[0].uri, '1.ts', 'only segment request');
+      });
+    });
+
+    QUnit.test('segment requests make key requests when key isn\'t cached', function(assert) {
+      return this.setupMediaSource(loader.mediaSource_, loader.sourceUpdater_).then(() => {
+        return new Promise((resolve, reject) => {
+          loader.one('appended', resolve);
+          loader.one('error', reject);
+          loader.playlist(playlistWithDuration(20, { isEncrypted: true }));
+
+          loader.load();
+          this.clock.tick(1);
+
+          assert.strictEqual(this.requests.length, 2, 'one request');
+          assert.strictEqual(this.requests[0].uri, '0-key.php', 'key request');
+          assert.strictEqual(this.requests[1].uri, '0.ts', 'segment request');
+
+          // key response
+          standardXHRResponse(this.requests.shift(), encryptedSegmentKeyFn());
+          this.clock.tick(1);
+
+          // segment
+          standardXHRResponse(this.requests.shift(), encryptedSegmentFn());
+          this.clock.tick(1);
+
+          // decryption tick for syncWorker
+          this.clock.tick(1);
+        });
+      }).then(() => {
+        this.clock.tick(1);
+
+        assert.notOk(loader.keyCache_['0-key.php'], 'not cached');
+
+        assert.deepEqual(loader.pendingSegment_.segment.key, {
+          resolvedUri: '1-key.php',
+          uri: '1-key.php'
+        }, 'used cached key for request and own initialization vector');
+
+        assert.strictEqual(this.requests.length, 2, 'two requests');
+        assert.strictEqual(this.requests[0].uri, '1-key.php', 'key request');
+        assert.strictEqual(this.requests[1].uri, '1.ts', 'segment request');
+      });
+    });
+
     QUnit.module('Loading Calculation');
 
     QUnit.test('requests the first segment with an empty buffer', function(assert) {
-      loader.buffered_ = () => videojs.createTimeRanges();
+      loader.buffered_ = () => createTimeRanges();
       loader.playlist_ = playlistWithDuration(20);
       loader.mediaIndex = null;
       loader.hasPlayed_ = () => false;
@@ -1520,7 +1766,7 @@ export const LoaderCommonFactory = ({
     QUnit.test(
       'no request if video not played and 1 segment is buffered',
       function(assert) {
-        loader.buffered_ = () => videojs.createTimeRanges([[0, 1]]);
+        loader.buffered_ = () => createTimeRanges([[0, 1]]);
         loader.playlist_ = playlistWithDuration(20);
         loader.mediaIndex = 0;
         loader.hasPlayed_ = () => false;
@@ -1536,7 +1782,7 @@ export const LoaderCommonFactory = ({
     QUnit.test(
       'does not download the next segment if the buffer is full',
       function(assert) {
-        loader.buffered_ = () => videojs.createTimeRanges([[0, 30 + Config.GOAL_BUFFER_LENGTH]]);
+        loader.buffered_ = () => createTimeRanges([[0, 30 + Config.GOAL_BUFFER_LENGTH]]);
         loader.playlist_ = playlistWithDuration(30);
         loader.mediaIndex = null;
         loader.hasPlayed_ = () => true;
@@ -1552,7 +1798,7 @@ export const LoaderCommonFactory = ({
     QUnit.test(
       'downloads the next segment if the buffer is getting low',
       function(assert) {
-        loader.buffered_ = () => videojs.createTimeRanges([[0, 19.999]]);
+        loader.buffered_ = () => createTimeRanges([[0, 19.999]]);
         loader.playlist_ = playlistWithDuration(30);
         loader.mediaIndex = 1;
         loader.hasPlayed_ = () => true;
@@ -1567,7 +1813,7 @@ export const LoaderCommonFactory = ({
     );
 
     QUnit.test('stops downloading segments at the end of the playlist', function(assert) {
-      loader.buffered_ = () => videojs.createTimeRanges([[0, 60]]);
+      loader.buffered_ = () => createTimeRanges([[0, 60]]);
       loader.playlist_ = playlistWithDuration(60);
       loader.mediaIndex = null;
       loader.hasPlayed_ = () => true;
@@ -1581,7 +1827,7 @@ export const LoaderCommonFactory = ({
     QUnit.test(
       'stops downloading segments if buffered past reported end of the playlist',
       function(assert) {
-        loader.buffered_ = () => videojs.createTimeRanges([[0, 59.9]]);
+        loader.buffered_ = () => createTimeRanges([[0, 59.9]]);
         loader.playlist_ = playlistWithDuration(60);
         loader.mediaIndex = loader.playlist_.segments.length - 1;
         loader.hasPlayed_ = () => true;

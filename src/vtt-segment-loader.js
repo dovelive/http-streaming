@@ -9,9 +9,16 @@ import { initSegmentId } from './bin-utils';
 import { uint8ToUtf8 } from './util/string';
 import { REQUEST_ERRORS } from './media-segment-request';
 import { ONE_SECOND_IN_TS } from 'mux.js/lib/utils/clock';
+import {createTimeRanges} from './util/vjs-compat';
 
 const VTT_LINE_TERMINATORS =
   new Uint8Array('\n\n'.split('').map(char => char.charCodeAt(0)));
+
+class NoVttJsError extends Error {
+  constructor() {
+    super('Trying to parse received VTT cues, but there is no WebVTT. Make sure vtt.js is loaded.');
+  }
+}
 
 /**
  * An object that manages segment loading and appending.
@@ -30,18 +37,13 @@ export default class VTTSegmentLoader extends SegmentLoader {
 
     this.subtitlesTrack_ = null;
 
-    this.loaderType_ = 'subtitle';
-
     this.featuresNativeTextTracks_ = settings.featuresNativeTextTracks;
+
+    this.loadVttJs = settings.loadVttJs;
 
     // The VTT segment will have its own time mappings. Saving VTT segment timing info in
     // the sync controller leads to improper behavior.
     this.shouldSaveSegmentTimingInfo_ = false;
-  }
-
-  createTransmuxer_() {
-    // don't need to transmux any subtitles
-    return null;
   }
 
   /**
@@ -52,14 +54,14 @@ export default class VTTSegmentLoader extends SegmentLoader {
    */
   buffered_() {
     if (!this.subtitlesTrack_ || !this.subtitlesTrack_.cues || !this.subtitlesTrack_.cues.length) {
-      return videojs.createTimeRanges();
+      return createTimeRanges();
     }
 
     const cues = this.subtitlesTrack_.cues;
     const start = cues[0].startTime;
     const end = cues[cues.length - 1].startTime;
 
-    return videojs.createTimeRanges([[start, end]]);
+    return createTimeRanges([[start, end]]);
   }
 
   /**
@@ -275,10 +277,20 @@ export default class VTTSegmentLoader extends SegmentLoader {
     }
 
     const segmentInfo = this.pendingSegment_;
+    const isMp4WebVttSegmentWithCues = result.mp4VttCues && result.mp4VttCues.length;
+
+    if (isMp4WebVttSegmentWithCues) {
+      segmentInfo.mp4VttCues = result.mp4VttCues;
+    }
 
     // although the VTT segment loader bandwidth isn't really used, it's good to
     // maintain functionality between segment loaders
     this.saveBandwidthRelatedStats_(segmentInfo.duration, simpleSegment.stats);
+
+    // if this request included a segment key, save that data in the cache
+    if (simpleSegment.key) {
+      this.segmentKey(simpleSegment.key, true);
+    }
 
     this.state = 'APPENDING';
 
@@ -292,29 +304,18 @@ export default class VTTSegmentLoader extends SegmentLoader {
     }
     segmentInfo.bytes = simpleSegment.bytes;
 
-    // Make sure that vttjs has loaded, otherwise, wait till it finished loading
-    if (typeof window.WebVTT !== 'function' &&
-        this.subtitlesTrack_ &&
-        this.subtitlesTrack_.tech_) {
-
-      let loadHandler;
-      const errorHandler = () => {
-        this.subtitlesTrack_.tech_.off('vttjsloaded', loadHandler);
-        this.stopForError({
-          message: 'Error loading vtt.js'
-        });
-        return;
-      };
-
-      loadHandler = () => {
-        this.subtitlesTrack_.tech_.off('vttjserror', errorHandler);
-        this.segmentRequestFinished_(error, simpleSegment, result);
-      };
-
+    // Make sure that vttjs has loaded, otherwise, load it and wait till it finished loading
+    if (typeof window.WebVTT !== 'function' && typeof this.loadVttJs === 'function') {
       this.state = 'WAITING_ON_VTTJS';
-      this.subtitlesTrack_.tech_.one('vttjsloaded', loadHandler);
-      this.subtitlesTrack_.tech_.one('vttjserror', errorHandler);
-
+      // should be fine to call multiple times
+      // script will be loaded once but multiple listeners will be added to the queue, which is expected.
+      this.loadVttJs()
+        .then(
+          () => this.segmentRequestFinished_(error, simpleSegment, result),
+          () => this.stopForError({
+            message: 'Error loading vtt.js'
+          })
+        );
       return;
     }
 
@@ -324,16 +325,22 @@ export default class VTTSegmentLoader extends SegmentLoader {
       this.parseVTTCues_(segmentInfo);
     } catch (e) {
       this.stopForError({
-        message: e.message
+        message: e.message,
+        metadata: {
+          errorType: videojs.Error.StreamingVttParserError,
+          error: e
+        }
       });
       return;
     }
 
-    this.updateTimeMapping_(
-      segmentInfo,
-      this.syncController_.timelines[segmentInfo.timeline],
-      this.playlist_
-    );
+    if (!isMp4WebVttSegmentWithCues) {
+      this.updateTimeMapping_(
+        segmentInfo,
+        this.syncController_.timelines[segmentInfo.timeline],
+        this.playlist_
+      );
+    }
 
     if (segmentInfo.cues.length) {
       segmentInfo.timingInfo = {
@@ -375,16 +382,53 @@ export default class VTTSegmentLoader extends SegmentLoader {
     this.handleAppendsDone_();
   }
 
-  handleData_() {
-    // noop as we shouldn't be getting video/audio data captions
-    // that we do not support here.
+  handleData_(simpleSegment, result) {
+    const isVttType = simpleSegment && simpleSegment.type === 'vtt';
+    const isTextResult = result && result.type === 'text';
+    const isFmp4VttSegment = isVttType && isTextResult;
+    // handle segment data for fmp4 encapsulated webvtt
+
+    if (isFmp4VttSegment) {
+      super.handleData_(simpleSegment, result);
+    }
   }
+
   updateTimingInfoEnd_() {
     // noop
   }
 
   /**
+   * Utility function for converting mp4 webvtt cue objects into VTTCues.
+   *
+   * @param {Object} segmentInfo with mp4 webvtt cues for parsing into VTTCue objecs
+   */
+  parseMp4VttCues_(segmentInfo) {
+    const timestampOffset = this.sourceUpdater_.videoTimestampOffset() === null ?
+      this.sourceUpdater_.audioTimestampOffset() :
+      this.sourceUpdater_.videoTimestampOffset();
+
+    segmentInfo.mp4VttCues.forEach((cue) => {
+      const start = cue.start + timestampOffset;
+      const end = cue.end + timestampOffset;
+      const vttCue = new window.VTTCue(start, end, cue.cueText);
+
+      if (cue.settings) {
+        cue.settings.split(' ').forEach((cueSetting) => {
+          const keyValString = cueSetting.split(':');
+          const key = keyValString[0];
+          const value = keyValString[1];
+
+          vttCue[key] = isNaN(value) ? value : Number(value);
+        });
+      }
+      segmentInfo.cues.push(vttCue);
+    });
+  }
+
+  /**
    * Uses the WebVTT parser to parse the segment response
+   *
+   * @throws NoVttJsError
    *
    * @param {Object} segmentInfo
    *        a segment info object that describes the current segment
@@ -393,6 +437,19 @@ export default class VTTSegmentLoader extends SegmentLoader {
   parseVTTCues_(segmentInfo) {
     let decoder;
     let decodeBytesToString = false;
+
+    if (typeof window.WebVTT !== 'function') {
+      // caller is responsible for exception handling.
+      throw new NoVttJsError();
+    }
+
+    segmentInfo.cues = [];
+    segmentInfo.timestampmap = { MPEGTS: 0, LOCAL: 0 };
+
+    if (segmentInfo.mp4VttCues) {
+      this.parseMp4VttCues_(segmentInfo);
+      return;
+    }
 
     if (typeof window.TextDecoder === 'function') {
       decoder = new window.TextDecoder('utf8');
@@ -406,9 +463,6 @@ export default class VTTSegmentLoader extends SegmentLoader {
       window.vttjs,
       decoder
     );
-
-    segmentInfo.cues = [];
-    segmentInfo.timestampmap = { MPEGTS: 0, LOCAL: 0 };
 
     parser.oncue = segmentInfo.cues.push.bind(segmentInfo.cues);
     parser.ontimestampmap = (map) => {
@@ -469,13 +523,23 @@ export default class VTTSegmentLoader extends SegmentLoader {
       return;
     }
 
-    const timestampmap = segmentInfo.timestampmap;
-    const diff = (timestampmap.MPEGTS / ONE_SECOND_IN_TS) - timestampmap.LOCAL + mappingObj.mapping;
+    const { MPEGTS, LOCAL } = segmentInfo.timestampmap;
+
+    /**
+     * From the spec:
+     * The MPEGTS media timestamp MUST use a 90KHz timescale,
+     * even when non-WebVTT Media Segments use a different timescale.
+     */
+    const mpegTsInSeconds = MPEGTS / ONE_SECOND_IN_TS;
+
+    const diff = mpegTsInSeconds - LOCAL + mappingObj.mapping;
 
     segmentInfo.cues.forEach((cue) => {
-      // First convert cue time to TS time using the timestamp-map provided within the vtt
-      cue.startTime += diff;
-      cue.endTime += diff;
+      const duration = cue.endTime - cue.startTime;
+      const startTime = this.handleRollover_(cue.startTime + diff, mappingObj.time);
+
+      cue.startTime = Math.max(startTime, 0);
+      cue.endTime = Math.max(startTime + duration, 0);
     });
 
     if (!playlist.syncInfo) {
@@ -487,5 +551,49 @@ export default class VTTSegmentLoader extends SegmentLoader {
         time: Math.min(firstStart, lastStart - segment.duration)
       };
     }
+  }
+
+  /**
+   * MPEG-TS PES timestamps are limited to 2^33.
+   * Once they reach 2^33, they roll over to 0.
+   * mux.js handles PES timestamp rollover for the following scenarios:
+   * [forward rollover(right)] ->
+   *    PES timestamps monotonically increase, and once they reach 2^33, they roll over to 0
+   * [backward rollover(left)] -->
+   *    we seek back to position before rollover.
+   *
+   * According to the HLS SPEC:
+   * When synchronizing WebVTT with PES timestamps, clients SHOULD account
+   * for cases where the 33-bit PES timestamps have wrapped and the WebVTT
+   * cue times have not.  When the PES timestamp wraps, the WebVTT Segment
+   * SHOULD have a X-TIMESTAMP-MAP header that maps the current WebVTT
+   * time to the new (low valued) PES timestamp.
+   *
+   * So we want to handle rollover here and align VTT Cue start/end time to the player's time.
+   */
+  handleRollover_(value, reference) {
+    if (reference === null) {
+      return value;
+    }
+
+    let valueIn90khz = value * ONE_SECOND_IN_TS;
+    const referenceIn90khz = reference * ONE_SECOND_IN_TS;
+
+    let offset;
+
+    if (referenceIn90khz < valueIn90khz) {
+      // - 2^33
+      offset = -8589934592;
+    } else {
+      // + 2^33
+      offset = 8589934592;
+    }
+
+    // distance(value - reference) > 2^32
+    while (Math.abs(valueIn90khz - referenceIn90khz) > 4294967296) {
+      valueIn90khz += offset;
+    }
+
+    return valueIn90khz / ONE_SECOND_IN_TS;
   }
 }

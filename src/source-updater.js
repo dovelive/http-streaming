@@ -9,6 +9,7 @@ import {getMimeForCodec} from '@videojs/vhs-utils/es/codecs.js';
 import window from 'global/window';
 import toTitleCase from './util/to-title-case.js';
 import { QUOTA_EXCEEDED_ERR } from './error-codes';
+import {createTimeRanges, bufferedRangesToString} from './util/vjs-compat';
 
 const bufferTypes = [
   'video',
@@ -274,14 +275,37 @@ const actions = {
     }
 
     // do not update codec if we don't need to.
-    if (sourceUpdater.codecs[type] === codec) {
+    // Only update if we change the codec base.
+    // For example, going from avc1.640028 to avc1.64001f does not require a changeType call.
+    const newCodecBase = codec.substring(0, codec.indexOf('.'));
+    const oldCodec = sourceUpdater.codecs[type];
+    const oldCodecBase = oldCodec.substring(0, oldCodec.indexOf('.'));
+
+    if (oldCodecBase === newCodecBase) {
       return;
     }
+    const metadata = {
+      codecsChangeInfo: {
+        from: oldCodec,
+        to: codec
+      }
+    };
 
-    sourceUpdater.logger_(`changing ${type}Buffer codec from ${sourceUpdater.codecs[type]} to ${codec}`);
+    sourceUpdater.trigger({ type: 'codecschange', metadata });
+    sourceUpdater.logger_(`changing ${type}Buffer codec from ${oldCodec} to ${codec}`);
 
-    sourceBuffer.changeType(mime);
-    sourceUpdater.codecs[type] = codec;
+    // check if change to the provided type is supported
+    try {
+      sourceBuffer.changeType(mime);
+      sourceUpdater.codecs[type] = codec;
+    } catch (e) {
+      metadata.errorType = videojs.Error.StreamingCodecsChangeError;
+      metadata.error = e;
+      e.metadata = metadata;
+      sourceUpdater.error_ = e;
+      sourceUpdater.trigger('error');
+      videojs.log.warn(`Failed to changeType on ${type}Buffer`, e);
+    }
   }
 };
 
@@ -302,6 +326,11 @@ const onUpdateend = (type, sourceUpdater) => (e) => {
   // updateend events on source buffers. This does not appear to be in the spec. As such,
   // if we encounter an updateend without a corresponding pending action from our queue
   // for that source buffer type, process the next action.
+  const bufferedRangesForType = sourceUpdater[`${type}Buffered`]();
+  const descriptiveString = bufferedRangesToString(bufferedRangesForType);
+
+  sourceUpdater.logger_(`received "updateend" event for ${type} Source Buffer: `, descriptiveString);
+
   if (sourceUpdater.queuePending[type]) {
     const doneFn = sourceUpdater.queuePending[type].doneFn;
 
@@ -467,11 +496,9 @@ export default class SourceUpdater extends videojs.EventTarget {
    *          if removeSourceBuffer can be called.
    */
   canRemoveSourceBuffer() {
-    // IE reports that it supports removeSourceBuffer, but often throws
-    // errors when attempting to use the function. So we report that it
-    // does not support removeSourceBuffer. As of Firefox 83 removeSourceBuffer
-    // throws errors, so we report that it does not support this as well.
-    return !videojs.browser.IE_VERSION && !videojs.browser.IS_FIREFOX && window.MediaSource &&
+    // As of Firefox 83 removeSourceBuffer
+    // throws errors, so we report that it does not support this.
+    return !videojs.browser.IS_FIREFOX && window.MediaSource &&
       window.MediaSource.prototype &&
       typeof window.MediaSource.prototype.removeSourceBuffer === 'function';
   }
@@ -605,11 +632,11 @@ export default class SourceUpdater extends videojs.EventTarget {
     // no media source/source buffer or it isn't in the media sources
     // source buffer list
     if (!inSourceBuffers(this.mediaSource, this.audioBuffer)) {
-      return videojs.createTimeRange();
+      return createTimeRanges();
     }
 
     return this.audioBuffer.buffered ? this.audioBuffer.buffered :
-      videojs.createTimeRange();
+      createTimeRanges();
   }
 
   /**
@@ -622,10 +649,10 @@ export default class SourceUpdater extends videojs.EventTarget {
     // no media source/source buffer or it isn't in the media sources
     // source buffer list
     if (!inSourceBuffers(this.mediaSource, this.videoBuffer)) {
-      return videojs.createTimeRange();
+      return createTimeRanges();
     }
     return this.videoBuffer.buffered ? this.videoBuffer.buffered :
-      videojs.createTimeRange();
+      createTimeRanges();
   }
 
   /**
@@ -791,7 +818,7 @@ export default class SourceUpdater extends videojs.EventTarget {
     if (typeof offset !== 'undefined' &&
         this.videoBuffer &&
         // no point in updating if it's the same
-        this.videoTimestampOffset !== offset) {
+        this.videoTimestampOffset_ !== offset) {
       pushQueue({
         type: 'video',
         sourceUpdater: this,

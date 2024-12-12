@@ -1,11 +1,13 @@
 import { module, test } from 'qunit';
 import document from 'global/document';
+import window from 'global/window';
 import {
   TEST_ONLY_SIMPLE_SELECTOR,
   simpleSelector,
   movingAverageBandwidthSelector,
   minRebufferMaxBandwidthSelector,
-  lowestBitrateCompatibleVariantSelector
+  lowestBitrateCompatibleVariantSelector,
+  lastBandwidthSelector
 } from '../src/playlist-selectors';
 import Config from '../src/config';
 
@@ -20,11 +22,11 @@ module('Playlist Selectors', {
         }
       },
       playlists: {
-        master: {
+        main: {
           playlists: []
         }
       },
-      masterPlaylistController_: {}
+      playlistController_: {}
     };
   },
   afterEach() {
@@ -36,7 +38,7 @@ test('Exponential moving average has a configurable decay parameter', function(a
   let playlist;
   const instantAverage = movingAverageBandwidthSelector(1.0);
 
-  this.vhs.playlists.master.playlists = [
+  this.vhs.playlists.main.playlists = [
     { attributes: { BANDWIDTH: 1 } },
     { attributes: { BANDWIDTH: 50 } },
     { attributes: { BANDWIDTH: 100 } }
@@ -77,7 +79,7 @@ test('Calling exponential moving average wont decay average unless new bandwidth
     return simSel(...args);
   });
 
-  this.vhs.playlists.master.playlists = [
+  this.vhs.playlists.main.playlists = [
     { attributes: { BANDWIDTH: 1 } },
     { attributes: { BANDWIDTH: 50 } },
     { attributes: { BANDWIDTH: 100 } }
@@ -113,7 +115,7 @@ test('Calling exponential moving average wont decay average unless new bandwidth
 test(
   'minRebufferMaxBandwidthSelector picks highest rendition without rebuffering',
   function(assert) {
-    const master = this.vhs.playlists.master;
+    const main = this.vhs.playlists.main;
     const currentTime = 0;
     let bandwidth = 2000;
     const duration = 100;
@@ -126,7 +128,7 @@ test(
 
     const settings = () => {
       return {
-        master,
+        main,
         currentTime,
         bandwidth,
         duration,
@@ -137,7 +139,7 @@ test(
       };
     };
 
-    master.playlists = [
+    main.playlists = [
       { attributes: { BANDWIDTH: 100 }, syncPoint: false },
       { attributes: { BANDWIDTH: 500 }, syncPoint: false },
       { attributes: { BANDWIDTH: 1000 }, syncPoint: false },
@@ -147,10 +149,10 @@ test(
 
     let result = minRebufferMaxBandwidthSelector(settings());
 
-    assert.equal(result.playlist, master.playlists[1], 'selected the correct playlist');
+    assert.equal(result.playlist, main.playlists[1], 'selected the correct playlist');
     assert.equal(result.rebufferingImpact, 0, 'impact on rebuffering is 0');
 
-    master.playlists = [
+    main.playlists = [
       { attributes: { BANDWIDTH: 100 }, syncPoint: false },
       { attributes: { BANDWIDTH: 500 }, syncPoint: false },
       { attributes: { BANDWIDTH: 1000 }, syncPoint: true },
@@ -160,7 +162,7 @@ test(
 
     result = minRebufferMaxBandwidthSelector(settings());
 
-    assert.equal(result.playlist, master.playlists[2], 'selected the corerct playlist');
+    assert.equal(result.playlist, main.playlists[2], 'selected the corerct playlist');
     assert.equal(result.rebufferingImpact, 0, 'impact on rebuffering is 0');
 
     bandwidth = 500;
@@ -168,7 +170,7 @@ test(
 
     result = minRebufferMaxBandwidthSelector(settings());
 
-    assert.equal(result.playlist, master.playlists[0], 'selected the correct playlist');
+    assert.equal(result.playlist, main.playlists[0], 'selected the correct playlist');
     assert.equal(result.rebufferingImpact, 1, 'impact on rebuffering is 1 second');
   }
 );
@@ -178,13 +180,13 @@ test(
   function(assert) {
     // Set this up out of order to make sure that the function sorts all
     // playlists by bandwidth
-    this.vhs.playlists.master.playlists = [
+    this.vhs.playlists.main.playlists = [
       { attributes: { BANDWIDTH: 10, CODECS: 'mp4a.40.2' } },
       { attributes: { BANDWIDTH: 100, CODECS: 'mp4a.40.2, avc1.4d400d' } },
       { attributes: { BANDWIDTH: 50, CODECS: 'mp4a.40.2, avc1.4d400d' } }
     ];
 
-    const expectedPlaylist = this.vhs.playlists.master.playlists[2];
+    const expectedPlaylist = this.vhs.playlists.main.playlists[2];
     const testPlaylist = lowestBitrateCompatibleVariantSelector.call(this.vhs);
 
     assert.equal(
@@ -197,7 +199,7 @@ test(
 test(
   'lowestBitrateCompatibleVariantSelector return null if no video exists',
   function(assert) {
-    this.vhs.playlists.master.playlists = [
+    this.vhs.playlists.main.playlists = [
       { attributes: { BANDWIDTH: 50, CODECS: 'mp4a.40.2' } },
       { attributes: { BANDWIDTH: 10, CODECS: 'mp4a.40.2' } },
       { attributes: { BANDWIDTH: 100, CODECS: 'mp4a.40.2' } }
@@ -213,16 +215,16 @@ test(
 );
 
 test('simpleSelector switches up even without resolution information', function(assert) {
-  const master = this.vhs.playlists.master;
+  const main = this.vhs.playlists.main;
 
-  master.playlists = [
+  main.playlists = [
     { attributes: { BANDWIDTH: 100 } },
     { attributes: { BANDWIDTH: 1000 } }
   ];
 
-  const selectedPlaylist = simpleSelector(master, 2000, 1, 1, false);
+  const selectedPlaylist = simpleSelector(main, 2000, 1, 1, false);
 
-  assert.equal(selectedPlaylist, master.playlists[1], 'selected the correct playlist');
+  assert.equal(selectedPlaylist, main.playlists[1], 'selected the correct playlist');
 });
 
 // A set of playlists that were defined using non-traditional encoding.
@@ -238,23 +240,23 @@ const trickyPlaylists = [
 ];
 
 test('simpleSelector limits using resolution information when it exists', function(assert) {
-  const master = this.vhs.playlists.master;
+  const main = this.vhs.playlists.main;
 
-  master.playlists = trickyPlaylists;
+  main.playlists = trickyPlaylists;
 
-  const selectedPlaylist = simpleSelector(master, Config.INITIAL_BANDWIDTH, 444, 790, true, {});
+  const selectedPlaylist = simpleSelector(main, Config.INITIAL_BANDWIDTH, 444, 790, true, {});
 
-  assert.equal(selectedPlaylist, master.playlists[3], 'selected the playlist with the lowest bandwidth higher than player resolution');
+  assert.equal(selectedPlaylist, main.playlists[3], 'selected the playlist with the lowest bandwidth higher than player resolution');
 });
 
 test('simpleSelector can not limit based on resolution information', function(assert) {
-  const master = this.vhs.playlists.master;
+  const main = this.vhs.playlists.main;
 
-  master.playlists = trickyPlaylists;
+  main.playlists = trickyPlaylists;
 
-  const selectedPlaylist = simpleSelector(master, Config.INITIAL_BANDWIDTH, 444, 790, false);
+  const selectedPlaylist = simpleSelector(main, Config.INITIAL_BANDWIDTH, 444, 790, false);
 
-  assert.equal(selectedPlaylist, master.playlists[4], 'selected a playlist based solely on bandwidth');
+  assert.equal(selectedPlaylist, main.playlists[4], 'selected a playlist based solely on bandwidth');
 });
 
 test('simpleSelector chooses between current audio playlists for audio only', function(assert) {
@@ -262,12 +264,12 @@ test('simpleSelector chooses between current audio playlists for audio only', fu
     {id: 'foo'},
     {id: 'bar', attributes: {BANDWIDTH: 534216}}
   ];
-  const masterPlaylistController = {
+  const playlistController = {
     getAudioTrackPlaylists_: () => audioPlaylists
   };
-  const master = this.vhs.playlists.master;
+  const main = this.vhs.playlists.main;
 
-  master.mediaGroups = {
+  main.mediaGroups = {
     AUDIO: {
       main: {
         en: {id: 'en', playlists: audioPlaylists}
@@ -275,17 +277,17 @@ test('simpleSelector chooses between current audio playlists for audio only', fu
     }
   };
 
-  const selectedPlaylist = simpleSelector(master, Config.INITIAL_BANDWIDTH, 444, 790, false, masterPlaylistController);
+  const selectedPlaylist = simpleSelector(main, Config.INITIAL_BANDWIDTH, 444, 790, false, playlistController);
 
   assert.equal(selectedPlaylist, audioPlaylists[1], 'selected an audio based solely on bandwidth');
 });
 
-test('simpleSelector experimentalLeastPixelDiffSelector selects least pixel diff resolution.', function(assert) {
+test('simpleSelector leastPixelDiffSelector selects least pixel diff resolution.', function(assert) {
   const bandwidth = Config.INITIAL_BANDWIDTH;
-  const master = this.vhs.playlists.master;
-  const usePixelDiff = {experimentalLeastPixelDiffSelector: true};
+  const main = this.vhs.playlists.main;
+  const usePixelDiff = {leastPixelDiffSelector: true};
 
-  master.playlists = [
+  main.playlists = [
     { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 768, height: 432 } } },
     { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 1024, height: 576 } } },
     { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 1280, height: 720 } } },
@@ -296,34 +298,145 @@ test('simpleSelector experimentalLeastPixelDiffSelector selects least pixel diff
   let nonPixelDiff;
 
   // +1 pixel
-  pixelDiff = simpleSelector(master, Infinity, 1281, 721, true, usePixelDiff);
-  nonPixelDiff = simpleSelector(master, Infinity, 1281, 721, true, {});
+  pixelDiff = simpleSelector(main, Infinity, 1281, 721, true, usePixelDiff);
+  nonPixelDiff = simpleSelector(main, Infinity, 1281, 721, true, {});
 
-  assert.equal(pixelDiff, master.playlists[2], '1281w x 721h pixel diff');
-  assert.equal(nonPixelDiff, master.playlists[3], '1281w x 721h resolution plus one');
+  assert.equal(pixelDiff, main.playlists[2], '1281w x 721h pixel diff');
+  assert.equal(nonPixelDiff, main.playlists[3], '1281w x 721h resolution plus one');
 
   // -1 pixel
-  pixelDiff = simpleSelector(master, Infinity, 1279, 719, true, usePixelDiff);
-  nonPixelDiff = simpleSelector(master, Infinity, 1279, 719, true, {});
+  pixelDiff = simpleSelector(main, Infinity, 1279, 719, true, usePixelDiff);
+  nonPixelDiff = simpleSelector(main, Infinity, 1279, 719, true, {});
 
-  assert.equal(pixelDiff, master.playlists[2], '1279w x 719h pixel diff');
-  assert.equal(nonPixelDiff, master.playlists[2], '1279w x 719h resolution plus one');
+  assert.equal(pixelDiff, main.playlists[2], '1279w x 719h pixel diff');
+  assert.equal(nonPixelDiff, main.playlists[2], '1279w x 719h resolution plus one');
 
   // equal to player resolution
-  pixelDiff = simpleSelector(master, Infinity, 1280, 720, true, usePixelDiff);
-  nonPixelDiff = simpleSelector(master, Infinity, 1280, 720, true, {});
+  pixelDiff = simpleSelector(main, Infinity, 1280, 720, true, usePixelDiff);
+  nonPixelDiff = simpleSelector(main, Infinity, 1280, 720, true, {});
 
-  assert.equal(pixelDiff, master.playlists[2], '1280w x 720h pixel diff');
-  assert.equal(nonPixelDiff, master.playlists[2], '1280w x 720h resolution plus one');
+  assert.equal(pixelDiff, main.playlists[2], '1280w x 720h pixel diff');
+  assert.equal(nonPixelDiff, main.playlists[2], '1280w x 720h resolution plus one');
 
-  master.playlists.push({ attributes: { BANDWIDTH: bandwidth - 1, RESOLUTION: { width: 1280, height: 720 } } });
-  master.playlists.push({ attributes: { BANDWIDTH: bandwidth + 1, RESOLUTION: { width: 1280, height: 720 } } });
+  main.playlists.push({ attributes: { BANDWIDTH: bandwidth - 1, RESOLUTION: { width: 1280, height: 720 } } });
+  main.playlists.push({ attributes: { BANDWIDTH: bandwidth + 1, RESOLUTION: { width: 1280, height: 720 } } });
 
   // equal to player resolution, chooses higher bandwidth
-  pixelDiff = simpleSelector(master, Infinity, 1280, 720, true, usePixelDiff);
-  nonPixelDiff = simpleSelector(master, Infinity, 1280, 720, true, {});
+  pixelDiff = simpleSelector(main, Infinity, 1280, 720, true, usePixelDiff);
+  nonPixelDiff = simpleSelector(main, Infinity, 1280, 720, true, {});
 
-  assert.equal(pixelDiff, master.playlists[5], '1280w x 720h pixel diff higher bandwidth');
-  assert.equal(nonPixelDiff, master.playlists[5], '1280w x 720h resolution plus higher bandwidth');
+  assert.equal(pixelDiff, main.playlists[5], '1280w x 720h pixel diff higher bandwidth');
+  assert.equal(nonPixelDiff, main.playlists[5], '1280w x 720h resolution plus higher bandwidth');
+});
 
+test('lastBandwidthSelector uses customPixelRatio to pick rendition', function(assert) {
+  let playlist;
+  const bandwidth = 20;
+
+  const oldGetComputedStyle = window.getComputedStyle;
+
+  // Mock a 540p player.
+  window.getComputedStyle = function() {
+    return {
+      width: 960,
+      height: 540
+    };
+  };
+
+  // Ensure system bandwith is greater than the rendition bandwidths.
+  this.vhs.systemBandwidth = bandwidth + 10;
+  // This is true by default.
+  this.vhs.limitRenditionByPlayerDimensions = true;
+
+  this.vhs.playlists.main.playlists = [
+    { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 480, height: 270 } } },
+    { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 960, height: 540 } } },
+    { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 1440, height: 810 } } },
+    { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 1920, height: 1080 } } }
+  ];
+
+  // Picks the lowest possible rendition
+  this.vhs.customPixelRatio = 0;
+  playlist = lastBandwidthSelector.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 270, 'selected the lowest rendition');
+
+  this.vhs.customPixelRatio = 0.5;
+  playlist = lastBandwidthSelector.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 270, 'selected the rendition with 270p');
+
+  this.vhs.customPixelRatio = 1;
+  playlist = lastBandwidthSelector.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 540, 'selected the rendition with 540p');
+
+  this.vhs.customPixelRatio = 1.5;
+  playlist = lastBandwidthSelector.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 810, 'selected the rendition with 810p');
+
+  this.vhs.customPixelRatio = 2;
+  playlist = lastBandwidthSelector.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 1080, 'selected the rendition with 1080p');
+
+  // Since the customPixelRatio sets the player dimension higher than any available rendition,
+  // This value is entirely based on bandwidth.
+  this.vhs.customPixelRatio = 4;
+  playlist = lastBandwidthSelector.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 270, 'selected the rendition based on bandwidth');
+
+  window.getComputedStyle = oldGetComputedStyle;
+});
+
+test('movingAverageBandwidthSelector uses customPixelRatio to pick rendition', function(assert) {
+  let playlist;
+  const bandwidth = 20;
+  const selectionFunction = movingAverageBandwidthSelector(1);
+  const oldGetComputedStyle = window.getComputedStyle;
+
+  // Mock a 540p player.
+  window.getComputedStyle = function() {
+    return {
+      width: 960,
+      height: 540
+    };
+  };
+
+  // Ensure system bandwith is greater than the rendition bandwidths.
+  this.vhs.systemBandwidth = bandwidth + 10;
+  // This is true by default.
+  this.vhs.limitRenditionByPlayerDimensions = true;
+
+  this.vhs.playlists.main.playlists = [
+    { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 480, height: 270 } } },
+    { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 960, height: 540 } } },
+    { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 1440, height: 810 } } },
+    { attributes: { BANDWIDTH: bandwidth, RESOLUTION: { width: 1920, height: 1080 } } }
+  ];
+
+  // Picks the lowest possible rendition
+  this.vhs.customPixelRatio = 0;
+  playlist = selectionFunction.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 270, 'selected the lowest rendition');
+
+  this.vhs.customPixelRatio = 0.5;
+  playlist = selectionFunction.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 270, 'selected the rendition with 270p');
+
+  this.vhs.customPixelRatio = 1;
+  playlist = selectionFunction.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 540, 'selected the rendition with 540p');
+
+  this.vhs.customPixelRatio = 1.5;
+  playlist = selectionFunction.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 810, 'selected the rendition with 810p');
+
+  this.vhs.customPixelRatio = 2;
+  playlist = selectionFunction.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 1080, 'selected the rendition with 1080p');
+
+  // Since the customPixelRatio sets the player dimension higher than any available rendition,
+  // This value is entirely based on bandwidth.
+  this.vhs.customPixelRatio = 4;
+  playlist = selectionFunction.call(this.vhs);
+  assert.equal(playlist.attributes.RESOLUTION.height, 270, 'selected the rendition based on bandwidth');
+
+  window.getComputedStyle = oldGetComputedStyle;
 });

@@ -4,7 +4,7 @@ import { codecsForPlaylist } from './util/codecs.js';
 /**
  * Returns a function that acts as the Enable/disable playlist function.
  *
- * @param {PlaylistLoader} loader - The master playlist loader
+ * @param {PlaylistLoader} loader - The main playlist loader
  * @param {string} playlistID - id of the playlist
  * @param {Function} changePlaylistFn - A function to be called after a
  * playlist's enabled-state has been changed. Will NOT be called if a
@@ -14,7 +14,7 @@ import { codecsForPlaylist } from './util/codecs.js';
  * @return {Function} Function for setting/getting enabled
  */
 const enableFunction = (loader, playlistID, changePlaylistFn) => (enable) => {
-  const playlist = loader.master.playlists[playlistID];
+  const playlist = loader.main.playlists[playlistID];
   const incompatible = isIncompatible(playlist);
   const currentlyEnabled = isEnabled(playlist);
 
@@ -27,14 +27,24 @@ const enableFunction = (loader, playlistID, changePlaylistFn) => (enable) => {
   } else {
     playlist.disabled = true;
   }
+  const metadata = {
+    renditionInfo: {
+      id: playlistID,
+      bandwidth: playlist.attributes.BANDWIDTH,
+      resolution: playlist.attributes.RESOLUTION,
+      codecs: playlist.attributes.CODECS
+    },
+    cause: 'fast-quality'
+  };
 
   if (enable !== currentlyEnabled && !incompatible) {
     // Ensure the outside world knows about our changes
-    changePlaylistFn();
     if (enable) {
-      loader.trigger('renditionenabled');
+      // call fast quality change only when the playlist is enabled
+      changePlaylistFn(playlist);
+      loader.trigger({ type: 'renditionenabled', metadata});
     } else {
-      loader.trigger('renditiondisabled');
+      loader.trigger({ type: 'renditiondisabled', metadata});
     }
   }
   return enable;
@@ -50,12 +60,9 @@ const enableFunction = (loader, playlistID, changePlaylistFn) => (enable) => {
 class Representation {
   constructor(vhsHandler, playlist, id) {
     const {
-      masterPlaylistController_: mpc,
-      options_: { smoothQualityChange }
+      playlistController_: pc
     } = vhsHandler;
-    // Get a reference to a bound version of the quality change function
-    const changeType = smoothQualityChange ? 'smooth' : 'fast';
-    const qualityChangeFunction = mpc[`${changeType}QualityChange_`].bind(mpc);
+    const qualityChangeFunction = pc.fastQualityChange_.bind(pc);
 
     // some playlist attributes are optional
     if (playlist.attributes) {
@@ -65,17 +72,18 @@ class Representation {
       this.height = resolution && resolution.height;
 
       this.bandwidth = playlist.attributes.BANDWIDTH;
+      this.frameRate = playlist.attributes['FRAME-RATE'];
     }
     if (playlist.attributes.NAME) {
       this.name = playlist.attributes.NAME;
     }
 
-    this.codecs = codecsForPlaylist(mpc.master(), playlist);
+    this.codecs = codecsForPlaylist(pc.main(), playlist);
 
     this.playlist = playlist;
 
     // The id is simply the ordinality of the media playlist
-    // within the master playlist
+    // within the main playlist
     this.id = id;
 
     // Partially-apply the enableFunction to create a playlist-
@@ -99,10 +107,10 @@ const renditionSelectionMixin = function(vhsHandler) {
 
   // Add a single API-specific function to the VhsHandler instance
   vhsHandler.representations = () => {
-    const master = vhsHandler.masterPlaylistController_.master();
-    const playlists = isAudioOnly(master) ?
-      vhsHandler.masterPlaylistController_.getAudioTrackPlaylists_() :
-      master.playlists;
+    const main = vhsHandler.playlistController_.main();
+    const playlists = isAudioOnly(main) ?
+      vhsHandler.playlistController_.getAudioTrackPlaylists_() :
+      main.playlists;
 
     if (!playlists) {
       return [];
