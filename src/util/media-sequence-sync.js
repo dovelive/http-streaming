@@ -250,7 +250,9 @@ export class MediaSequenceSync {
       for (let i = 0; i < mediaSequenceDiff; i++) {
         const segment = segments[i];
 
-        baseTime -= segment.duration;
+        if (segment && segment.duration) {
+          baseTime -= segment.duration;
+        }
       }
 
       return baseTime;
