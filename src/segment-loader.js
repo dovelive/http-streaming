@@ -1350,7 +1350,7 @@ bufferedEnd: ${lastBufferedEnd(this.buffered_())}
     const isFmp4 = this.currentMediaInfo_ && this.currentMediaInfo_.isFmp4;
     const isHlsTs = this.sourceType_ === 'hls' && !isFmp4;
 
-    if (isHlsTs) {
+    if (isHlsTs && !this.seeking_()) {
       this.shouldForceTimestampOffsetAfterResync_ = true;
     }
     this.callQueue_ = [];
